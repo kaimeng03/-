@@ -1,11 +1,13 @@
 import { NextRequest } from "next/server";
 import { revalidatePath } from "next/cache";
 import { addCategory } from "@/lib/sourceStore";
-import { requireAdmin, checkRateLimit } from "@/lib/apiGuard";
+import { requireAdmin, requireTrustedOrigin, checkRateLimit } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  const originError = requireTrustedOrigin(req);
+  if (originError) return originError;
   const authError = requireAdmin(req);
   if (authError) return authError;
   const rateLimitError = checkRateLimit(req, "mutate-sources", 20, 60 * 60 * 1000);

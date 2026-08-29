@@ -23,15 +23,78 @@ async function translateFeedHtml(html: string): Promise<string> {
   return root.innerHTML;
 }
 
+/** Sanitizes feedHtmlEn and translates it, producing a feed-content (or, if there's
+ *  no feed HTML at all, summary-only) response. Shared by the feedOnly path (HTML
+ *  adapter sources, which never attempt live extraction) and the gated-extraction
+ *  fallback path (RSS sources whose live page turned out to be a login wall etc). */
+async function buildFeedContentResponse(params: {
+  feedHtmlEn: string | null;
+  titleEn: string;
+  titleZh: string;
+  gate?: ExtractedContent["gate"];
+}): Promise<ExtractedContent> {
+  const { feedHtmlEn, titleEn, titleZh, gate } = params;
+
+  if (feedHtmlEn) {
+    try {
+      const sanitized = sanitizeArticleHtml(feedHtmlEn);
+      const [translatedTitle, htmlZh] = await Promise.all([
+        titleEn ? translateText(titleEn).catch(() => titleZh || titleEn) : "",
+        translateFeedHtml(sanitized).catch(() => sanitized), // fall back to the sanitized original on translation failure
+      ]);
+      return {
+        status: "feed-content",
+        titleEn,
+        titleZh: translatedTitle || titleZh || titleEn,
+        byline: null,
+        htmlEn: sanitized,
+        htmlZh: sanitizeArticleHtml(htmlZh),
+        siteName: null,
+        gate,
+      };
+    } catch (err) {
+      console.error("feed-content build failed, falling back to summary-only:", err);
+    }
+  }
+
+  return {
+    status: "summary-only",
+    titleEn,
+    titleZh: titleZh || titleEn,
+    byline: null,
+    htmlEn: null,
+    htmlZh: null,
+    siteName: null,
+    gate,
+  };
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const url = typeof body?.url === "string" ? body.url : "";
   const feedHtmlEn = typeof body?.feedHtmlEn === "string" ? body.feedHtmlEn : null;
   const titleEnFallback = typeof body?.titleEn === "string" ? body.titleEn : "";
   const titleZhFallback = typeof body?.titleZh === "string" ? body.titleZh : "";
+  const feedOnly = body?.feedOnly === true;
 
   if (!url) {
     return Response.json({ error: "缺少 url 參數" }, { status: 400, headers: JSON_HEADERS });
+  }
+
+  // HTML-adapter sources (e.g. twarchitect's /page_news/ listing): the adapter
+  // already scraped the one news item's content when the article list was built.
+  // There's no separate per-article page to fetch, and `url` here actually points
+  // back at the shared listing page — calling extractArticle(url) would scrape and
+  // Readability-parse THAT ENTIRE LISTING as if it were one article, mixing in
+  // every other news item, the site nav, etc. So this path must never reach
+  // extractArticle at all.
+  if (feedOnly) {
+    const result = await buildFeedContentResponse({
+      feedHtmlEn,
+      titleEn: titleEnFallback,
+      titleZh: titleZhFallback,
+    });
+    return Response.json(result, { headers: JSON_HEADERS });
   }
 
   try {
@@ -44,41 +107,12 @@ export async function POST(req: NextRequest) {
     // render it in whichever language the reader currently has selected.
     if (err instanceof ContentGateError) {
       console.warn(`Content gated (${err.gate}) for ${url}`);
-
-      if (feedHtmlEn) {
-        try {
-          const sanitized = sanitizeArticleHtml(feedHtmlEn);
-          const [titleZh, htmlZh] = await Promise.all([
-            titleEnFallback ? translateText(titleEnFallback).catch(() => titleZhFallback || titleEnFallback) : "",
-            translateFeedHtml(sanitized),
-          ]);
-          const result: ExtractedContent = {
-            status: "feed-content",
-            titleEn: titleEnFallback,
-            titleZh: titleZh || titleZhFallback || titleEnFallback,
-            byline: null,
-            htmlEn: sanitized,
-            htmlZh: sanitizeArticleHtml(htmlZh),
-            siteName: null,
-            gate: err.gate,
-          };
-          return Response.json(result, { headers: JSON_HEADERS });
-        } catch (fallbackErr) {
-          console.error("Feed-content fallback translation failed:", fallbackErr);
-          // Fall through to summary-only below rather than failing the request.
-        }
-      }
-
-      const result: ExtractedContent = {
-        status: "summary-only",
+      const result = await buildFeedContentResponse({
+        feedHtmlEn,
         titleEn: titleEnFallback,
-        titleZh: titleZhFallback || titleEnFallback,
-        byline: null,
-        htmlEn: null,
-        htmlZh: null,
-        siteName: null,
+        titleZh: titleZhFallback,
         gate: err.gate,
-      };
+      });
       return Response.json(result, { headers: JSON_HEADERS });
     }
 

@@ -1,6 +1,17 @@
 import type { NextRequest } from "next/server";
 import { isAdminRequest, isAdminConfigured } from "./adminAuth";
 import { rateLimit, clientIp } from "./rateLimit";
+import { checkTrustedOrigin } from "./csrf";
+
+/** Returns a 403 Response if the request's Origin isn't one of our own trusted
+ *  origins, else null. Call this before requireAdmin on any mutation route. */
+export function requireTrustedOrigin(req: NextRequest): Response | null {
+  const result = checkTrustedOrigin(req);
+  if (!result.ok) {
+    return Response.json({ error: "跨來源請求已被拒絕" }, { status: 403 });
+  }
+  return null;
+}
 
 /** Returns a 401/501 Response if the request isn't an authenticated admin, else null. */
 export function requireAdmin(req: NextRequest): Response | null {

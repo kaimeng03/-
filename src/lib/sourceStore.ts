@@ -4,6 +4,7 @@ import Parser from "rss-parser";
 import { FALLBACK_CONFIG, type Category, type Source, type SourcesConfig } from "./sources";
 import { discoverFeed } from "./feedDiscovery";
 import { safeFetch, readBodyWithLimit, UnsafeUrlError } from "./safeFetch";
+import { matchHtmlSourceAdapter, getHtmlAdapter } from "./adapters";
 
 const LOCAL_FILE = path.join(process.cwd(), "data", "sources.json");
 const GITHUB_API = "https://api.github.com";
@@ -207,28 +208,57 @@ export async function addSource(input: { name: string; feedUrl: string; category
   if (!name) throw new Error("網站名稱不能是空的");
   if (!inputUrl) throw new Error("網址不能是空的");
 
-  // Accept either a direct RSS/Atom feed URL or a plain website homepage URL —
-  // discoverFeed tries the URL as-is first, then HTML <link> autodiscovery,
-  // then a short list of common feed paths. It never invents a feed URL.
-  const discovery = await discoverFeed(inputUrl);
-  if (!discovery.ok) throw new Error(discovery.error);
-  const feedUrl = discovery.feedUrl;
+  // Some sites have no RSS/Atom feed at all and are handled by a dedicated HTML
+  // adapter instead (see src/lib/adapters). That's checked FIRST and centrally
+  // here — if it matches, we skip discoverFeed/validateFeedUrl entirely rather
+  // than trying (and failing) to treat the page as a feed.
+  const htmlMatch = matchHtmlSourceAdapter(inputUrl);
 
-  const validation = await validateFeedUrl(feedUrl);
-  if (!validation.ok) throw new Error(validation.error);
+  let feedUrl: string;
+  let homepage: string;
+  let extraFields: Pick<Source, "type" | "adapter" | "pageUrl"> = {};
 
-  let homepage = feedUrl;
-  try {
-    // Prefer the origin of what the user actually typed (often the homepage),
-    // falling back to the discovered feed's origin if that's not parseable.
-    const u = new URL(inputUrl);
-    homepage = `${u.protocol}//${u.host}`;
-  } catch {
+  if (htmlMatch) {
+    const adapterFn = getHtmlAdapter(htmlMatch.adapter);
+    if (!adapterFn) throw new Error("找不到對應的網站解析器");
+
+    let articles;
     try {
-      const u = new URL(feedUrl);
+      articles = await adapterFn(htmlMatch.pageUrl);
+    } catch {
+      throw new Error("無法讀取這個網站的新聞列表，請稍後再試");
+    }
+    if (!articles || articles.length === 0) {
+      throw new Error("這個網站目前沒有偵測到任何新聞項目");
+    }
+
+    feedUrl = htmlMatch.pageUrl;
+    homepage = htmlMatch.homepage;
+    extraFields = { type: "html", adapter: htmlMatch.adapter, pageUrl: htmlMatch.pageUrl };
+  } else {
+    // Accept either a direct RSS/Atom feed URL or a plain website homepage URL —
+    // discoverFeed tries the URL as-is first, then HTML <link> autodiscovery,
+    // then a short list of common feed paths. It never invents a feed URL.
+    const discovery = await discoverFeed(inputUrl);
+    if (!discovery.ok) throw new Error(discovery.error);
+    feedUrl = discovery.feedUrl;
+
+    const validation = await validateFeedUrl(feedUrl);
+    if (!validation.ok) throw new Error(validation.error);
+
+    homepage = feedUrl;
+    try {
+      // Prefer the origin of what the user actually typed (often the homepage),
+      // falling back to the discovered feed's origin if that's not parseable.
+      const u = new URL(inputUrl);
       homepage = `${u.protocol}//${u.host}`;
     } catch {
-      // keep feedUrl as last-resort fallback
+      try {
+        const u = new URL(feedUrl);
+        homepage = `${u.protocol}//${u.host}`;
+      } catch {
+        // keep feedUrl as last-resort fallback
+      }
     }
   }
 
@@ -238,12 +268,12 @@ export async function addSource(input: { name: string; feedUrl: string; category
     }
     const normalizedNew = normalizeUrl(feedUrl);
     if (content.sources.some((s) => normalizeUrl(s.feedUrl) === normalizedNew)) {
-      throw new Error("這個新聞來源已經加入過了");
+      throw new Error(htmlMatch ? "已經關注這個新聞來源了" : "這個新聞來源已經加入過了");
     }
 
     const existingIds = new Set(content.sources.map((s) => s.id));
     const id = uniqueId(slugify(name), existingIds);
-    const source: Source = { id, name, homepage, feedUrl, categoryId: input.categoryId };
+    const source: Source = { id, name, homepage, feedUrl, categoryId: input.categoryId, ...extraFields };
     return {
       updated: { ...content, sources: [...content.sources, source] },
       result: source,

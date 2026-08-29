@@ -1,11 +1,13 @@
 import { NextRequest } from "next/server";
 import { revalidatePath } from "next/cache";
 import { removeCategory, NotFoundError, CategoryNotEmptyError } from "@/lib/sourceStore";
-import { requireAdmin, checkRateLimit } from "@/lib/apiGuard";
+import { requireAdmin, requireTrustedOrigin, checkRateLimit } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
 export async function DELETE(req: NextRequest, ctx: RouteContext<"/api/categories/[id]">) {
+  const originError = requireTrustedOrigin(req);
+  if (originError) return originError;
   const authError = requireAdmin(req);
   if (authError) return authError;
   const rateLimitError = checkRateLimit(req, "mutate-sources", 20, 60 * 60 * 1000);

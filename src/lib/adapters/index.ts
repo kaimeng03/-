@@ -2,6 +2,7 @@ import { fetchTwarchitectNews } from "./twarchitect";
 import type { HtmlAdapterArticle } from "./types";
 
 export type { HtmlAdapterArticle };
+export { matchHtmlSourceAdapter, type HtmlAdapterMatch } from "./match";
 
 type AdapterFn = (pageUrl: string) => Promise<HtmlAdapterArticle[]>;
 

@@ -42,15 +42,8 @@
       "categoryId": "architecture-news"
     },
     {
-      "id": "twarchitect",
-      "name": "建築師雜誌",
-      "homepage": "https://www.twarchitect.org.tw",
-      "feedUrl": "https://www.twarchitect.org.tw/feed/",
-      "categoryId": "architecture-news"
-    },
-    {
       "id": "twarchitect-news",
-      "name": "建築師雜誌（新聞）",
+      "name": "建築師雜誌",
       "homepage": "https://www.twarchitect.org.tw/page_news/",
       "feedUrl": "https://www.twarchitect.org.tw/page_news/",
       "categoryId": "architecture-news",

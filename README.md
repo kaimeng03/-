@@ -36,18 +36,24 @@ npm run build        # 正式 build
 新增網站、新增分類、取消關注來源、刪除分類等會修改資料的功能，都需要先登入管理者身份，避免公開網站被匿名訪客亂改新聞來源清單。
 
 1. 設定環境變數 `ADMIN_PASSWORD`（自訂一組密碼）
-2. 網站左下角會出現「管理者登入」，輸入密碼登入後，才會看到「＋ 新增網站」「＋ 新增分類」與各項目旁的「✕」刪除按鈕
+2. 「＋ 新增網站」「＋ 新增分類」按鈕，以及每個分類/來源旁的「✕」刪除按鈕，**一直都看得到**（不會因為沒登入就消失）——未登入時點擊會先彈出登入提示，登入成功後自動接續原本要做的動作（例如自動打開「新增網站」表單，或自動重新彈出剛剛要刪除的確認視窗），不用再點第二次
 3. 登入狀態存在瀏覽器的 HttpOnly cookie（7 天有效），密碼本身不會被送到瀏覽器可讀取的地方，也不會出現在畫面或程式碼裡
+4. 部署到 Vercel 時，管理 API（新增/刪除、登出）還會檢查請求的 `Origin` 是否為本站網址，跨站請求會被擋下（見下方「同源保護 / CSRF」）——記得依說明設定 `NEXT_PUBLIC_SITE_URL`，否則管理功能會全部回傳「跨來源請求已被拒絕」
 
-沒有設定 `ADMIN_PASSWORD` 的話，網站仍可正常閱讀，只是新增/刪除功能完全不會出現。
+沒有設定 `ADMIN_PASSWORD` 的話，網站仍可正常閱讀；按下新增/刪除按鈕會清楚顯示「尚未設定管理密碼」的說明，而不是沒有反應。
 
 ## 新增新聞來源 / 分類資料夾
 
-登入管理者後，左側選單最上方有「＋ 新增網站」按鈕（填網站名稱、RSS 網址或網站首頁網址、選分類），分類清單最下方有「＋ 新增分類」按鈕。滑鼠移到分類或來源上會出現「✕」，可以取消關注來源或刪除分類（分類內還有來源時，會先告知數量並要求二次確認才會連同來源一併刪除）。
+左側選單最上方的「＋ 新增網站」按鈕（填網站名稱、RSS 網址或網站首頁網址、選分類）、分類清單最下方的「＋ 新增分類」按鈕，以及每個分類/來源右側的「✕」，任何人都看得到；實際新增/刪除需要先登入管理者（見上一節）。刪除分類時，分類內還有來源的話，會先告知數量，第二次更明確的警告確認後才會連同來源一併刪除（兩個原生 `confirm()` 已改成同一個可鍵盤操作、有清楚取消鍵的自製對話框）。
 
-新增網站時的偵測順序：直接當作 RSS/Atom feed 讀讀看 → 是 HTML 的話找 `<link rel="alternate">` 自動偵測 → 都沒有的話嘗試 `/feed`、`/rss` 等常見路徑。都沒偵測到的話會清楚顯示「沒有偵測到 RSS/Atom feed」，不會捏造假網址。已經加入過的來源（依網址判斷，會忽略結尾斜線等差異）會被擋下。
+新增網站時的偵測順序：
 
-沒有 RSS 的網站需要寫一個專屬的 adapter（放在 `src/lib/adapters/`），目前只有建築師雜誌的新聞列表頁 `/page_news/` 這一個範例，一般使用者無法透過網站介面自行新增這類來源。
+1. 先比對是不是已知需要專屬 adapter 的網站（目前是建築師雜誌 `/page_news/`，見下方）——是的話直接用該 adapter 解析，不會嘗試當成 RSS。
+2. 不是的話，直接當作 RSS/Atom feed 讀讀看 → 是 HTML 的話找 `<link rel="alternate">` 自動偵測 → 都沒有的話嘗試 `/feed`、`/rss` 等常見路徑。
+
+都沒偵測到的話會清楚顯示「沒有偵測到 RSS/Atom feed」，不會捏造假網址。已經加入過的來源（依網址判斷，會忽略結尾斜線等差異）會被擋下。
+
+**建築師雜誌 `/page_news/` 這個沒有 RSS 的網站，可以直接在「新增網站」欄位貼上它的網址新增**（`https://www.twarchitect.org.tw/page_news/`，有無 `www.`、有無結尾斜線、有沒有帶 `?query`/`#hash` 都能辨識），系統會自動用內建的 adapter 抓取。其他還沒有 RSS 的網站，需要先在 `src/lib/adapters/` 寫一個新的 adapter（並在 `src/lib/adapters/match.ts` 註冊網址判斷規則）才能透過介面新增；沒有對應 adapter 的網站，一般 RSS 流程還是會如常嘗試（多半會提示找不到 RSS/Atom feed）。
 
 這些資料實際存在 [data/sources.json](data/sources.json) 這個檔案裡：
 
@@ -66,6 +72,15 @@ npm run build        # 正式 build
   沒有設定 `GITHUB_TOKEN` 的話，網站仍然可以用，只是新增/刪除功能會操作失敗（因為沒有地方可以永久儲存）。
 
 本機開發若要測試 GitHub 版本，可以複製 `.env.example` 為 `.env.local` 並填入同樣的值。
+
+### 既有 GitHub `sources.json` 的遷移
+
+如果你在這次更新之前就已經用網站介面新增過分類/來源，GitHub repo 裡的 `data/sources.json` 可能還留著舊版「建築師雜誌」——用 `/feed/` 當 RSS 的那一筆（`id: "twarchitect"`），跟新的 `/page_news/` HTML adapter 那一筆（`id: "twarchitect-news"`）同時存在，側欄會看到兩個幾乎一樣的「建築師雜誌」。處理方式：
+
+1. 打開你 GitHub repo 裡的 `data/sources.json`
+2. 找到 `"id": "twarchitect"`、`"feedUrl"` 是 `.../feed/` 的那個物件，整段刪掉（不要刪到 `"id": "twarchitect-news"` 那個，那個是要保留的 HTML adapter 版本）
+3. 如果你的 repo 裡根本沒有任何一筆建築師雜誌，也可以直接略過這步，之後用「新增網站」貼 `https://www.twarchitect.org.tw/page_news/` 加回來即可
+4. 存檔 commit 後，網站下次重新整理就會生效，不需要重新部署
 
 ## 翻譯功能
 
@@ -110,9 +125,18 @@ git push -u origin main
 
 完成後 Vercel 會給你一個網址，手機、電腦都可以直接打開瀏覽，之後每天早上就能取代 Feedly 使用。
 
-想讓「翻譯」「新增/刪除來源」這兩類功能穩定運作，記得照上面「管理者登入」「新增新聞來源 / 分類資料夾」「翻譯功能」三個章節設定對應的環境變數（`ADMIN_PASSWORD`、`GITHUB_TOKEN` + `GITHUB_REPO`、`AZURE_TRANSLATOR_KEY` + `AZURE_TRANSLATOR_REGION`）。
+想讓「翻譯」「新增/刪除來源」這兩類功能穩定運作，記得照上面「管理者登入」「新增新聞來源 / 分類資料夾」「翻譯功能」「同源保護 / CSRF」四個章節設定對應的環境變數（`ADMIN_PASSWORD`、`GITHUB_TOKEN` + `GITHUB_REPO`、`AZURE_TRANSLATOR_KEY` + `AZURE_TRANSLATOR_REGION`、`NEXT_PUBLIC_SITE_URL`）。
 
 之後想更新網站程式碼，只要在本機改完、`git push`，Vercel 就會自動重新部署；新增新聞來源/分類則直接在網站上操作即可，不需要重新部署。
+
+## 同源保護 / CSRF
+
+新增/刪除網站或分類、登出這幾個會修改資料的 API，除了要求管理者登入，也會檢查請求的 `Origin` 是不是本站——不是的話一律擋下（回傳 403），避免其他網站誘導已登入的管理者瀏覽器發出偽造請求。這個檢查刻意不採信請求自帶的 `Host`／`X-Forwarded-Host`（那些可能被上游或客戶端影響），而是跟伺服器自己設定的網址比對：
+
+- 部署在 Vercel 時，`VERCEL_PROJECT_PRODUCTION_URL`／`VERCEL_URL` 由 Vercel 自動提供，一般不用手動設定。
+- 想確保萬無一失，或使用自訂網域，建議額外設定 `NEXT_PUBLIC_SITE_URL`（例如 `https://architecture-news.vercel.app` 或你的自訂網域），設定後以此為準。
+- 本機開發環境（`npm run dev`）固定允許 `http://localhost:3000`，不需要另外設定。
+- 都沒有比對到的話，管理 API 會回傳「跨來源請求已被拒絕」（403）——這是刻意的安全預設（fail closed），不是 bug；照上面設定 `NEXT_PUBLIC_SITE_URL` 即可解決。
 
 ## 已知限制
 
@@ -120,4 +144,5 @@ git push -u origin main
 - Dezeen、The Architect's Newspaper 有較強的防爬蟲保護，完整內文擷取常失敗，會自動退回顯示 RSS 內容或摘要。
 - 少數 ArchDaily 文章的擷取內容開頭會混入一小段網站自身的 UI 文字（例如影片長度標籤、「Subscriber Access」小標籤），實際文章全文仍完整可讀，屬於次要的內容擷取雜訊，非登入牆阻擋。
 - Rate limit（新增/刪除、登入、重新整理）採記憶體內計數，僅在單一伺服器執行個體內有效；在 Vercel 這類多執行個體/會冷啟動的環境下是盡力而為的防護，非嚴格保證。
-- 只能透過網站介面新增 RSS/Atom 來源；沒有 RSS 的網站需要另外撰寫 adapter 程式碼（`src/lib/adapters/`），無法透過網站介面新增。
+- 網站介面可以新增任何 RSS/Atom 來源，以及已經寫好 adapter 並在 `src/lib/adapters/match.ts` 註冊網址規則的 HTML 來源（目前是建築師雜誌 `/page_news/`）；其他還沒有 RSS 且沒有對應 adapter 的網站，需要先寫程式加上專屬 adapter，無法單純透過介面新增。
+- CSRF 的 Origin 檢查沒有另外做 CSRF token 機制，改以 `SameSite=Lax` cookie 搭配 Origin 比對作為主要防禦；這是現代瀏覽器下被廣泛接受的做法，但不是雙重保險。

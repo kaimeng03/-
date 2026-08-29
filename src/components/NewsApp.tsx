@@ -6,6 +6,7 @@ import Image from "next/image";
 import type { Article, ExtractedContent } from "@/lib/types";
 import type { Category, Source } from "@/lib/sources";
 import ArticleReader from "@/components/ArticleReader";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import { formatRelativeTime } from "@/lib/formatTime";
 import { t, type Lang } from "@/lib/i18n";
 import { useLang } from "@/lib/useLang";
@@ -15,8 +16,24 @@ import { useAdminSession } from "@/lib/useAdminSession";
 type Filter = { type: "all" } | { type: "category"; id: string } | { type: "source"; id: string };
 type View = "all" | "today" | "unread" | "saved";
 
+type PendingAction =
+  | { type: "add-source" }
+  | { type: "add-category" }
+  | { type: "remove-source"; source: Source }
+  | { type: "remove-category"; category: Category };
+
+type DialogState =
+  | { kind: "login-required" }
+  | { kind: "not-configured" }
+  | { kind: "confirm-remove-source"; source: Source }
+  | { kind: "confirm-remove-category-empty"; category: Category }
+  | { kind: "confirm-remove-category-step1"; category: Category; count: number }
+  | { kind: "confirm-remove-category-step2"; category: Category; count: number }
+  | null;
+
 const REFRESH_TIMEOUT_MS = 15000;
 const REFRESHED_FLASH_MS = 2500;
+const TOAST_MS = 3000;
 
 function proxied(url: string | null): string | null {
   if (!url) return null;
@@ -71,6 +88,12 @@ export default function NewsApp({
   const [addingSource, setAddingSource] = useState(false);
   const [showAdminLogin, setShowAdminLogin] = useState(false);
 
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [dialog, setDialog] = useState<DialogState>(null);
+  const [dialogError, setDialogError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
   useEffect(() => {
     document.documentElement.lang = lang === "zh" ? "zh-Hant" : "en";
   }, [lang]);
@@ -92,6 +115,12 @@ export default function NewsApp({
       if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const scoped = useMemo(() => {
     if (filter.type === "all") return articles;
@@ -135,29 +164,18 @@ export default function NewsApp({
         // the article. There's no separate full-article page worth fetching, so
         // this renders straight from what fetchAllArticles() already gathered
         // instead of attempting (and failing) live extraction against a listing page.
-        setContent({
-          status: article.feedHtmlEn ? "feed-content" : "summary-only",
-          titleEn: article.titleEn,
-          titleZh: article.titleZh,
-          byline: null,
-          htmlEn: article.feedHtmlEn,
-          htmlZh: article.feedHtmlEn, // translated server-side below if needed
-          siteName: null,
+        const res = await fetch("/api/content", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: article.link,
+            feedHtmlEn: article.feedHtmlEn,
+            titleEn: article.titleEn,
+            titleZh: article.titleZh,
+            feedOnly: true,
+          }),
         });
-        if (article.feedHtmlEn) {
-          const res = await fetch("/api/content", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              url: article.link,
-              feedHtmlEn: article.feedHtmlEn,
-              titleEn: article.titleEn,
-              titleZh: article.titleZh,
-              feedOnly: true,
-            }),
-          });
-          setContent(await res.json());
-        }
+        setContent(await res.json());
         return;
       }
 
@@ -202,44 +220,125 @@ export default function NewsApp({
     router.refresh();
   }
 
-  async function handleRemoveSource(source: Source) {
-    if (!confirm(t(lang, "confirmRemoveSource", { name: source.name }))) return;
-    const res = await fetch(`/api/sources/${encodeURIComponent(source.id)}`, { method: "DELETE" });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      alert(data.error || t(lang, "deleteFailed"));
-      return;
+  /** Gate for anything that mutates data: shows a clear reason and returns false
+   *  instead of silently doing nothing when the admin feature isn't usable yet. */
+  function requireAdminOrPrompt(action: PendingAction): boolean {
+    if (!admin.configured) {
+      setDialog({ kind: "not-configured" });
+      return false;
     }
-    if (filter.type === "source" && filter.id === source.id) setFilter({ type: "all" });
-    if (selected && selected.sourceId === source.id) {
-      setSelected(null);
-      setContent(null);
+    if (!admin.isAdmin) {
+      setPendingAction(action);
+      setDialog({ kind: "login-required" });
+      return false;
     }
-    router.refresh();
+    return true;
   }
 
-  async function handleRemoveCategory(category: Category) {
-    const count = sources.filter((s) => s.categoryId === category.id).length;
-    const message =
-      count > 0
-        ? t(lang, "confirmRemoveCategoryNonEmpty", { name: category.name, count: String(count) })
-        : t(lang, "confirmRemoveCategoryEmpty", { name: category.name });
-    if (!confirm(message)) return;
+  function handleAddWebsiteClick() {
+    if (!requireAdminOrPrompt({ type: "add-source" })) return;
+    setAddingSource((v) => !v);
+  }
 
-    const res = await fetch(`/api/categories/${encodeURIComponent(category.id)}?force=true`, {
-      method: "DELETE",
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      alert(data.error || t(lang, "deleteFailed"));
-      return;
+  function handleAddCategoryClick() {
+    if (!requireAdminOrPrompt({ type: "add-category" })) return;
+    setAddingCategory(true);
+  }
+
+  function openRemoveCategoryDialog(category: Category) {
+    const count = sources.filter((s) => s.categoryId === category.id).length;
+    setDialogError(null);
+    setDialog(
+      count === 0
+        ? { kind: "confirm-remove-category-empty", category }
+        : { kind: "confirm-remove-category-step1", category, count },
+    );
+  }
+
+  function requestRemoveSource(source: Source) {
+    if (!requireAdminOrPrompt({ type: "remove-source", source })) return;
+    setDialogError(null);
+    setDialog({ kind: "confirm-remove-source", source });
+  }
+
+  function requestRemoveCategory(category: Category) {
+    if (!requireAdminOrPrompt({ type: "remove-category", category })) return;
+    openRemoveCategoryDialog(category);
+  }
+
+  /** Runs after a successful admin login: resumes whatever the user originally
+   *  clicked (auto-opens the add form, or re-shows the delete confirmation) rather
+   *  than silently dropping their intent and making them click twice. */
+  async function loginAndResumePendingAction(password: string): Promise<string | null> {
+    const err = await admin.login(password);
+    if (err) return err;
+
+    setDialog(null);
+    setShowAdminLogin(false);
+    const action = pendingAction;
+    setPendingAction(null);
+    if (action?.type === "add-source") setAddingSource(true);
+    else if (action?.type === "add-category") setAddingCategory(true);
+    else if (action?.type === "remove-source") {
+      setDialogError(null);
+      setDialog({ kind: "confirm-remove-source", source: action.source });
+    } else if (action?.type === "remove-category") openRemoveCategoryDialog(action.category);
+    return null;
+  }
+
+  async function doRemoveSource(source: Source) {
+    setDeleting(true);
+    setDialogError(null);
+    try {
+      const res = await fetch(`/api/sources/${encodeURIComponent(source.id)}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setDialogError(data.error || t(lang, "deleteFailed"));
+        return;
+      }
+      setDialog(null);
+      if (filter.type === "source" && filter.id === source.id) setFilter({ type: "all" });
+      if (selected && selected.sourceId === source.id) {
+        setSelected(null);
+        setContent(null);
+      }
+      setToast(t(lang, "unfollowedSuccess", { name: source.name }));
+      router.refresh();
+    } finally {
+      setDeleting(false);
     }
-    if (filter.type === "category" && filter.id === category.id) setFilter({ type: "all" });
-    if (selected && selected.categoryId === category.id) {
-      setSelected(null);
-      setContent(null);
+  }
+
+  async function doRemoveCategory(category: Category, force: boolean) {
+    setDeleting(true);
+    setDialogError(null);
+    try {
+      const res = await fetch(
+        `/api/categories/${encodeURIComponent(category.id)}${force ? "?force=true" : ""}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setDialogError(data.error || t(lang, "deleteFailed"));
+        return;
+      }
+      setDialog(null);
+      if (filter.type === "category" && filter.id === category.id) setFilter({ type: "all" });
+      if (selected && selected.categoryId === category.id) {
+        setSelected(null);
+        setContent(null);
+      }
+      setToast(t(lang, "deletedCategorySuccess", { name: category.name }));
+      router.refresh();
+    } finally {
+      setDeleting(false);
     }
-    router.refresh();
+  }
+
+  function loginRequiredMessage(): string {
+    if (pendingAction?.type === "add-source") return t(lang, "loginRequiredAddWebsite");
+    if (pendingAction?.type === "add-category") return t(lang, "loginRequiredAddCategory");
+    return t(lang, "manageSubscriptionsLoginRequired");
   }
 
   return (
@@ -247,6 +346,7 @@ export default function NewsApp({
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-black/10 px-4 py-3 dark:border-white/10">
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() => setSidebarOpen(true)}
             className="rounded-md border border-black/10 px-2.5 py-1.5 text-sm text-neutral-600 hover:bg-black/5 md:hidden dark:border-white/15 dark:text-neutral-300 dark:hover:bg-white/10"
             aria-label={t(lang, "openMenu")}
@@ -323,6 +423,7 @@ export default function NewsApp({
           <div className="mb-2 flex items-center justify-between md:hidden">
             <span className="text-sm font-medium text-neutral-500">{t(lang, "categoriesLabel")}</span>
             <button
+              type="button"
               onClick={() => setSidebarOpen(false)}
               className="rounded-md px-2 py-1 text-sm text-neutral-500 hover:bg-black/5 dark:hover:bg-white/10"
               aria-label={t(lang, "closeMenu")}
@@ -331,26 +432,23 @@ export default function NewsApp({
             </button>
           </div>
 
-          {admin.isAdmin && (
-            <>
-              <button
-                onClick={() => setAddingSource((v) => !v)}
-                className="mb-3 w-full rounded-md border border-dashed border-black/20 px-2 py-1.5 text-left text-sm font-medium text-neutral-600 transition hover:bg-black/5 dark:border-white/20 dark:text-neutral-300 dark:hover:bg-white/10"
-              >
-                {t(lang, "addWebsite")}
-              </button>
-              {addingSource && (
-                <AddSourceForm
-                  lang={lang}
-                  categories={categories}
-                  onDone={() => {
-                    setAddingSource(false);
-                    router.refresh();
-                  }}
-                  onCancel={() => setAddingSource(false)}
-                />
-              )}
-            </>
+          <button
+            type="button"
+            onClick={handleAddWebsiteClick}
+            className="mb-3 w-full rounded-md border border-dashed border-black/20 px-2 py-1.5 text-left text-sm font-medium text-neutral-600 transition hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 dark:border-white/20 dark:text-neutral-300 dark:hover:bg-white/10"
+          >
+            {t(lang, "addWebsite")}
+          </button>
+          {admin.isAdmin && addingSource && (
+            <AddSourceForm
+              lang={lang}
+              categories={categories}
+              onDone={() => {
+                setAddingSource(false);
+                router.refresh();
+              }}
+              onCancel={() => setAddingSource(false)}
+            />
           )}
 
           <SidebarButton
@@ -365,7 +463,7 @@ export default function NewsApp({
               const catUnread = unreadCountFor((a) => a.categoryId === cat.id);
               return (
                 <div key={cat.id}>
-                  <div className="group flex items-center">
+                  <div className="flex items-center">
                     <button
                       onClick={() => selectFilter({ type: "category", id: cat.id })}
                       className={`min-w-0 flex-1 rounded-md px-2 py-1.5 text-left text-sm font-semibold transition ${
@@ -379,25 +477,24 @@ export default function NewsApp({
                         <span className="ml-1.5 text-xs font-normal text-neutral-400">{catUnread}</span>
                       )}
                     </button>
-                    {admin.isAdmin && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveCategory(cat);
-                        }}
-                        aria-label={t(lang, "removeCategoryLabel", { name: cat.name })}
-                        className="ml-1 shrink-0 rounded px-1.5 py-1 text-xs text-neutral-400 opacity-0 transition hover:bg-red-500/10 hover:text-red-600 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 group-hover:opacity-100 group-focus-within:opacity-100 sm:opacity-0 [@media(hover:none)]:opacity-100"
-                      >
-                        ✕
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        requestRemoveCategory(cat);
+                      }}
+                      aria-label={t(lang, "removeCategoryLabel", { name: cat.name })}
+                      title={t(lang, "removeCategoryLabel", { name: cat.name })}
+                      className="ml-1 shrink-0 rounded px-1.5 py-1 text-sm text-neutral-400 transition hover:bg-red-500/10 hover:text-red-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 dark:text-neutral-500"
+                    >
+                      ✕
+                    </button>
                   </div>
                   <div className="ml-3 mt-0.5 border-l border-black/10 pl-2 dark:border-white/10">
                     {catSources.map((s) => {
                       const srcUnread = unreadCountFor((a) => a.sourceId === s.id);
                       return (
-                        <div key={s.id} className="group flex items-center">
+                        <div key={s.id} className="flex items-center">
                           <SidebarButton
                             label={s.name}
                             badge={srcUnread > 0 ? srcUnread : undefined}
@@ -405,19 +502,18 @@ export default function NewsApp({
                             onClick={() => selectFilter({ type: "source", id: s.id })}
                             compact
                           />
-                          {admin.isAdmin && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRemoveSource(s);
-                              }}
-                              aria-label={t(lang, "removeSourceLabel", { name: s.name })}
-                              className="ml-1 shrink-0 rounded px-1.5 py-0.5 text-xs text-neutral-400 opacity-0 transition hover:bg-red-500/10 hover:text-red-600 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 group-hover:opacity-100 group-focus-within:opacity-100 sm:opacity-0 [@media(hover:none)]:opacity-100"
-                            >
-                              ✕
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              requestRemoveSource(s);
+                            }}
+                            aria-label={t(lang, "removeSourceLabel", { name: s.name })}
+                            title={t(lang, "removeSourceLabel", { name: s.name })}
+                            className="ml-1 shrink-0 rounded px-1.5 py-0.5 text-sm text-neutral-400 transition hover:bg-red-500/10 hover:text-red-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400 dark:text-neutral-500"
+                          >
+                            ✕
+                          </button>
                         </div>
                       );
                     })}
@@ -426,27 +522,26 @@ export default function NewsApp({
               );
             })}
 
-            {admin.isAdmin && (
-              <div>
-                {addingCategory ? (
-                  <AddCategoryForm
-                    lang={lang}
-                    onDone={() => {
-                      setAddingCategory(false);
-                      router.refresh();
-                    }}
-                    onCancel={() => setAddingCategory(false)}
-                  />
-                ) : (
-                  <button
-                    onClick={() => setAddingCategory(true)}
-                    className="w-full rounded-md px-2 py-1.5 text-left text-sm text-neutral-500 transition hover:bg-black/5 dark:hover:bg-white/10"
-                  >
-                    {t(lang, "addCategory")}
-                  </button>
-                )}
-              </div>
-            )}
+            <div>
+              {admin.isAdmin && addingCategory ? (
+                <AddCategoryForm
+                  lang={lang}
+                  onDone={() => {
+                    setAddingCategory(false);
+                    router.refresh();
+                  }}
+                  onCancel={() => setAddingCategory(false)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleAddCategoryClick}
+                  className="w-full rounded-md px-2 py-1.5 text-left text-sm text-neutral-500 transition hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500 dark:hover:bg-white/10"
+                >
+                  {t(lang, "addCategory")}
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="mt-6 border-t border-black/10 pt-3 dark:border-white/10">
@@ -456,7 +551,7 @@ export default function NewsApp({
                 isAdmin={admin.isAdmin}
                 showForm={showAdminLogin}
                 onShowForm={setShowAdminLogin}
-                onLogin={admin.login}
+                onLogin={loginAndResumePendingAction}
                 onLogout={admin.logout}
               />
             )}
@@ -541,6 +636,104 @@ export default function NewsApp({
           />
         </div>
       </div>
+
+      {toast && (
+        <div className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md bg-neutral-900 px-4 py-2 text-sm text-white shadow-lg dark:bg-white dark:text-neutral-900">
+          {toast}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={dialog?.kind === "login-required"}
+        title={t(lang, "adminLoginButton")}
+        message={loginRequiredMessage()}
+        confirmLabel={t(lang, "adminLoginButton")}
+        cancelLabel={t(lang, "cancel")}
+        onConfirm={() => {
+          setDialog(null);
+          setSidebarOpen(true);
+          setShowAdminLogin(true);
+        }}
+        onCancel={() => {
+          setDialog(null);
+          setPendingAction(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={dialog?.kind === "not-configured"}
+        title={t(lang, "adminNotConfiguredTitle")}
+        message={t(lang, "adminNotConfiguredMessage")}
+        confirmLabel={t(lang, "ok")}
+        hideCancel
+        onConfirm={() => setDialog(null)}
+        onCancel={() => setDialog(null)}
+      />
+
+      {dialog?.kind === "confirm-remove-source" && (
+        <ConfirmDialog
+          open
+          title={t(lang, "removeSourceLabel", { name: dialog.source.name })}
+          message={t(lang, "confirmRemoveSource", { name: dialog.source.name })}
+          confirmLabel={deleting ? t(lang, "deleting") : t(lang, "confirmDelete")}
+          cancelLabel={t(lang, "cancel")}
+          danger
+          busy={deleting}
+          error={dialogError}
+          onConfirm={() => doRemoveSource(dialog.source)}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+
+      {dialog?.kind === "confirm-remove-category-empty" && (
+        <ConfirmDialog
+          open
+          title={t(lang, "removeCategoryLabel", { name: dialog.category.name })}
+          message={t(lang, "confirmRemoveCategoryEmpty", { name: dialog.category.name })}
+          confirmLabel={deleting ? t(lang, "deleting") : t(lang, "confirmDelete")}
+          cancelLabel={t(lang, "cancel")}
+          danger
+          busy={deleting}
+          error={dialogError}
+          onConfirm={() => doRemoveCategory(dialog.category, false)}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+
+      {dialog?.kind === "confirm-remove-category-step1" && (
+        <ConfirmDialog
+          open
+          title={t(lang, "removeCategoryLabel", { name: dialog.category.name })}
+          message={t(lang, "confirmRemoveCategoryStep1", {
+            name: dialog.category.name,
+            count: String(dialog.count),
+          })}
+          confirmLabel={t(lang, "continueLabel")}
+          cancelLabel={t(lang, "cancel")}
+          onConfirm={() =>
+            setDialog({ kind: "confirm-remove-category-step2", category: dialog.category, count: dialog.count })
+          }
+          onCancel={() => setDialog(null)}
+        />
+      )}
+
+      {dialog?.kind === "confirm-remove-category-step2" && (
+        <ConfirmDialog
+          open
+          title={t(lang, "removeCategoryLabel", { name: dialog.category.name })}
+          message={t(lang, "confirmRemoveCategoryStep2", {
+            name: dialog.category.name,
+            count: String(dialog.count),
+          })}
+          confirmLabel={deleting ? t(lang, "deleting") : t(lang, "confirmDelete")}
+          cancelLabel={t(lang, "cancel")}
+          danger
+          busy={deleting}
+          error={dialogError}
+          onConfirm={() => doRemoveCategory(dialog.category, true)}
+          onCancel={() => setDialog(null)}
+        />
+      )}
     </div>
   );
 }
@@ -658,7 +851,6 @@ function AdminLoginArea({
     if (err) {
       setError(t(lang, "adminLoginError"));
     } else {
-      onShowForm(false);
       setPassword("");
     }
   }
