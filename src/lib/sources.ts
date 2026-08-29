@@ -11,42 +11,21 @@ export interface Source {
   categoryId: string;
 }
 
-export const CATEGORIES: Category[] = [{ id: "architecture-news", name: "建築新聞" }];
+export interface SourcesConfig {
+  categories: Category[];
+  sources: Source[];
+}
 
-export const SOURCES: Source[] = [
-  {
-    id: "archdaily",
-    name: "ArchDaily",
-    homepage: "https://www.archdaily.com",
-    feedUrl: "https://www.archdaily.com/rss/",
-    categoryId: "architecture-news",
-  },
-  {
-    id: "dezeen",
-    name: "Dezeen",
-    homepage: "https://www.dezeen.com",
-    feedUrl: "https://www.dezeen.com/feed/",
-    categoryId: "architecture-news",
-  },
-  {
-    id: "designboom",
-    name: "designboom",
-    homepage: "https://www.designboom.com/architecture",
-    feedUrl: "https://www.designboom.com/architecture/feed/",
-    categoryId: "architecture-news",
-  },
-  {
-    id: "architizer",
-    name: "Architizer",
-    homepage: "https://architizer.com",
-    feedUrl: "https://architizer.com/blog/feed/",
-    categoryId: "architecture-news",
-  },
-  {
-    id: "archpaper",
-    name: "The Architect's Newspaper",
-    homepage: "https://www.archpaper.com",
-    feedUrl: "https://www.archpaper.com/feed",
-    categoryId: "architecture-news",
-  },
-];
+// Used only if data/sources.json can't be read and there's no GitHub-backed store configured.
+export const FALLBACK_CONFIG: SourcesConfig = {
+  categories: [{ id: "architecture-news", name: "建築新聞" }],
+  sources: [
+    {
+      id: "archdaily",
+      name: "ArchDaily",
+      homepage: "https://www.archdaily.com",
+      feedUrl: "https://www.archdaily.com/rss/",
+      categoryId: "architecture-news",
+    },
+  ],
+};

@@ -1,6 +1,6 @@
 import Parser from "rss-parser";
 import crypto from "crypto";
-import { SOURCES, type Source } from "./sources";
+import type { Source } from "./sources";
 import { translateMany } from "./translate";
 import type { Article } from "./types";
 
@@ -55,7 +55,19 @@ function makeId(link: string): string {
   return crypto.createHash("md5").update(link).digest("hex");
 }
 
-async function fetchSourceArticles(source: Source): Promise<Article[]> {
+interface RawArticle {
+  id: string;
+  link: string;
+  sourceId: string;
+  sourceName: string;
+  categoryId: string;
+  pubDate: string | null;
+  thumbnail: string | null;
+  titleEn: string;
+  summaryEn: string;
+}
+
+async function fetchSourceArticles(source: Source): Promise<RawArticle[]> {
   try {
     const res = await fetch(source.feedUrl, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; ArchNewsReader/1.0)" },
@@ -70,14 +82,14 @@ async function fetchSourceArticles(source: Source): Promise<Article[]> {
         item.contentSnippet || stripHtml(item.summary || item.content || "");
       return {
         id: makeId(link),
-        title: item.title || "(無標題)",
         link,
         sourceId: source.id,
         sourceName: source.name,
         categoryId: source.categoryId,
         pubDate: item.isoDate || item.pubDate || null,
-        summary: rawSummary.slice(0, 220),
         thumbnail: extractThumbnail(item),
+        titleEn: item.title || "(無標題)",
+        summaryEn: rawSummary.slice(0, 220),
       };
     });
   } catch (err) {
@@ -86,8 +98,8 @@ async function fetchSourceArticles(source: Source): Promise<Article[]> {
   }
 }
 
-export async function fetchAllArticles(): Promise<Article[]> {
-  const results = await Promise.all(SOURCES.map(fetchSourceArticles));
+export async function fetchAllArticles(sources: Source[]): Promise<Article[]> {
+  const results = await Promise.all(sources.map(fetchSourceArticles));
   const all = results.flat();
   all.sort((a, b) => {
     const ta = a.pubDate ? new Date(a.pubDate).getTime() : 0;
@@ -97,12 +109,12 @@ export async function fetchAllArticles(): Promise<Article[]> {
   return translateArticles(all);
 }
 
-async function translateArticles(articles: Article[]): Promise<Article[]> {
-  const texts = articles.flatMap((a) => [a.title, a.summary]);
+async function translateArticles(articles: RawArticle[]): Promise<Article[]> {
+  const texts = articles.flatMap((a) => [a.titleEn, a.summaryEn]);
   const translated = await translateMany(texts);
   return articles.map((a, i) => ({
     ...a,
-    title: translated[i * 2] || a.title,
-    summary: translated[i * 2 + 1] || a.summary,
+    titleZh: translated[i * 2] || a.titleEn,
+    summaryZh: translated[i * 2 + 1] || a.summaryEn,
   }));
 }

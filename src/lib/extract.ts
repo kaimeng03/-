@@ -13,7 +13,12 @@ async function translateContentBlocks(contentHtml: string): Promise<string> {
   });
   const root = fragmentDom.window.document.getElementById("root")!;
   const blocks = Array.from(root.querySelectorAll(TRANSLATABLE_BLOCKS_SELECTOR)).filter(
-    (el) => (el.textContent || "").trim().length > 0 && !el.querySelector(TRANSLATABLE_BLOCKS_SELECTOR),
+    (el) =>
+      (el.textContent || "").trim().length > 0 &&
+      !el.querySelector(TRANSLATABLE_BLOCKS_SELECTOR) &&
+      // Skip blocks with nested elements (e.g. an <img> inside a <p>) — replacing
+      // textContent would silently delete those child elements.
+      !el.querySelector("img, svg, video, iframe"),
   );
 
   const texts = blocks.map((el) => el.textContent || "");
@@ -77,7 +82,7 @@ export async function extractArticle(url: string): Promise<ExtractedContent> {
     throw new Error("無法擷取完整內文");
   }
 
-  const [translatedTitle, translatedContentHtml] = await Promise.all([
+  const [titleZh, contentHtmlZh] = await Promise.all([
     parsedArticle.title
       ? translateText(parsedArticle.title).catch(() => parsedArticle.title)
       : Promise.resolve(""),
@@ -85,9 +90,11 @@ export async function extractArticle(url: string): Promise<ExtractedContent> {
   ]);
 
   return {
-    title: translatedTitle || parsedArticle.title || "",
+    titleEn: parsedArticle.title || "",
+    titleZh: titleZh || parsedArticle.title || "",
     byline: parsedArticle.byline || null,
-    html: rewriteImageUrls(translatedContentHtml, parsed.toString()),
+    htmlEn: rewriteImageUrls(parsedArticle.content, parsed.toString()),
+    htmlZh: rewriteImageUrls(contentHtmlZh, parsed.toString()),
     siteName: parsedArticle.siteName || null,
   };
 }

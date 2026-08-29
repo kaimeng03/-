@@ -1,18 +1,22 @@
 export interface Article {
   id: string;
-  title: string;
   link: string;
   sourceId: string;
   sourceName: string;
   categoryId: string;
   pubDate: string | null;
-  summary: string;
   thumbnail: string | null;
+  titleEn: string;
+  titleZh: string;
+  summaryEn: string;
+  summaryZh: string;
 }
 
 export interface ExtractedContent {
-  title: string;
+  titleEn: string;
+  titleZh: string;
   byline: string | null;
-  html: string;
+  htmlEn: string;
+  htmlZh: string;
   siteName: string | null;
 }

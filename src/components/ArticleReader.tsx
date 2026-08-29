@@ -8,12 +8,14 @@ export default function ArticleReader({
   content,
   loading,
   error,
+  lang,
   onBack,
 }: {
   article: Article | null;
   content: ExtractedContent | null;
   loading: boolean;
   error: string | null;
+  lang: "zh" | "en";
   onBack: () => void;
 }) {
   if (!article) {
@@ -23,6 +25,10 @@ export default function ArticleReader({
       </div>
     );
   }
+
+  const fallbackTitle = lang === "zh" ? article.titleZh : article.titleEn;
+  const title = content ? (lang === "zh" ? content.titleZh : content.titleEn) : fallbackTitle;
+  const html = content ? (lang === "zh" ? content.htmlZh : content.htmlEn) : null;
 
   return (
     <article className="mx-auto max-w-2xl px-5 py-6">
@@ -41,9 +47,7 @@ export default function ArticleReader({
         <span>{formatRelativeTime(article.pubDate)}</span>
       </div>
 
-      <h1 className="mb-4 text-2xl font-bold leading-tight">
-        {content?.title || article.title}
-      </h1>
+      <h1 className="mb-4 text-2xl font-bold leading-tight">{title}</h1>
 
       {loading && (
         <div className="py-10 text-center text-sm text-neutral-400">內文載入中…</div>
@@ -63,12 +67,9 @@ export default function ArticleReader({
         </div>
       )}
 
-      {content && !loading && !error && (
+      {html && !loading && !error && (
         <>
-          <div
-            className="article-content"
-            dangerouslySetInnerHTML={{ __html: content.html }}
-          />
+          <div className="article-content" dangerouslySetInnerHTML={{ __html: html }} />
           <a
             href={article.link}
             target="_blank"
