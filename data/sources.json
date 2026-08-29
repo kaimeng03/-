@@ -1,6 +1,9 @@
 {
   "categories": [
-    { "id": "architecture-news", "name": "建築新聞" }
+    {
+      "id": "architecture-news",
+      "name": "建築新聞"
+    }
   ],
   "sources": [
     {
@@ -37,6 +40,23 @@
       "homepage": "https://www.archpaper.com",
       "feedUrl": "https://www.archpaper.com/feed",
       "categoryId": "architecture-news"
+    },
+    {
+      "id": "twarchitect",
+      "name": "建築師雜誌",
+      "homepage": "https://www.twarchitect.org.tw",
+      "feedUrl": "https://www.twarchitect.org.tw/feed/",
+      "categoryId": "architecture-news"
+    },
+    {
+      "id": "twarchitect-news",
+      "name": "建築師雜誌（新聞）",
+      "homepage": "https://www.twarchitect.org.tw/page_news/",
+      "feedUrl": "https://www.twarchitect.org.tw/page_news/",
+      "categoryId": "architecture-news",
+      "type": "html",
+      "pageUrl": "https://www.twarchitect.org.tw/page_news/",
+      "adapter": "twarchitect"
     }
   ]
 }

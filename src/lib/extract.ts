@@ -1,11 +1,23 @@
 import { JSDOM, VirtualConsole } from "jsdom";
 import { Readability } from "@mozilla/readability";
-import { assertPublicHttpUrl } from "./safeFetch";
+import { safeFetch, readBodyWithLimit } from "./safeFetch";
 import { translateMany, translateText } from "./translate";
+import { sanitizeArticleHtml } from "./sanitizeArticleHtml";
+import { detectContentGate, type GateResult } from "./contentGate";
 import type { ExtractedContent } from "./types";
 
 const TRANSLATABLE_BLOCKS_SELECTOR =
   "p, h1, h2, h3, h4, h5, h6, li, figcaption, dd, dt, td, th";
+const MAX_ARTICLE_BYTES = 8 * 1024 * 1024; // 8MB of HTML is already very generous
+
+export class ContentGateError extends Error {
+  gate: Exclude<GateResult, "ok">;
+  constructor(gate: Exclude<GateResult, "ok">) {
+    super(`Content gated: ${gate}`);
+    this.name = "ContentGateError";
+    this.gate = gate;
+  }
+}
 
 async function translateContentBlocks(contentHtml: string): Promise<string> {
   const fragmentDom = new JSDOM(`<div id="root">${contentHtml}</div>`, {
@@ -30,7 +42,7 @@ async function translateContentBlocks(contentHtml: string): Promise<string> {
   return root.innerHTML;
 }
 
-function rewriteImageUrls(html: string, baseUrl: string): string {
+export function rewriteImageUrls(html: string, baseUrl: string): string {
   return html.replace(/<img\b[^>]*>/gi, (imgTag) => {
     const dataSrc = /\sdata-src=["']([^"']+)["']/i.exec(imgTag)?.[1];
     const dataLazySrc = /\sdata-lazy-src=["']([^"']+)["']/i.exec(imgTag)?.[1];
@@ -56,45 +68,60 @@ function rewriteImageUrls(html: string, baseUrl: string): string {
   });
 }
 
+/**
+ * Attempts to fetch and extract the full article. Throws ContentGateError (not a
+ * generic Error) when the page turns out to be a login wall, bot challenge, or
+ * suspiciously short extraction — callers use that to fall back to RSS-provided
+ * content rather than showing login-form text as if it were the article.
+ */
 export async function extractArticle(url: string): Promise<ExtractedContent> {
-  const parsed = assertPublicHttpUrl(url);
-
-  const res = await fetch(parsed.toString(), {
+  const { response, finalUrl } = await safeFetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 (compatible; ArchNewsReader/1.0)",
       Accept: "text/html,application/xhtml+xml",
     },
-    redirect: "follow",
     next: { revalidate: 3600 },
   });
-  if (!res.ok) {
-    throw new Error(`無法讀取原始網頁 (HTTP ${res.status})`);
+  if (!response.ok && response.status !== 401 && response.status !== 403) {
+    throw new Error(`無法讀取原始網頁 (HTTP ${response.status})`);
   }
-  const html = await res.text();
+
+  const buf = await readBodyWithLimit(response, MAX_ARTICLE_BYTES);
+  const html = new TextDecoder("utf-8").decode(buf);
 
   const dom = new JSDOM(html, {
-    url: parsed.toString(),
+    url: finalUrl,
     virtualConsole: new VirtualConsole(),
   });
   const reader = new Readability(dom.window.document);
   const parsedArticle = reader.parse();
-  if (!parsedArticle || !parsedArticle.content) {
-    throw new Error("無法擷取完整內文");
+
+  const gate = detectContentGate({
+    status: response.status,
+    rawHtmlSample: html.slice(0, 5000),
+    readabilityTitle: parsedArticle?.title ?? dom.window.document.title ?? null,
+    readabilityTextLength: (parsedArticle?.textContent || "").trim().length,
+  });
+  if (gate !== "ok" || !parsedArticle || !parsedArticle.content) {
+    throw new ContentGateError(gate === "ok" ? "too-short" : gate);
   }
+
+  const sanitizedEn = sanitizeArticleHtml(parsedArticle.content);
 
   const [titleZh, contentHtmlZh] = await Promise.all([
     parsedArticle.title
       ? translateText(parsedArticle.title).catch(() => parsedArticle.title)
       : Promise.resolve(""),
-    translateContentBlocks(parsedArticle.content),
+    translateContentBlocks(sanitizedEn),
   ]);
 
   return {
+    status: "full",
     titleEn: parsedArticle.title || "",
     titleZh: titleZh || parsedArticle.title || "",
     byline: parsedArticle.byline || null,
-    htmlEn: rewriteImageUrls(parsedArticle.content, parsed.toString()),
-    htmlZh: rewriteImageUrls(contentHtmlZh, parsed.toString()),
+    htmlEn: rewriteImageUrls(sanitizedEn, finalUrl),
+    htmlZh: rewriteImageUrls(sanitizeArticleHtml(contentHtmlZh), finalUrl),
     siteName: parsedArticle.siteName || null,
   };
 }

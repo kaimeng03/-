@@ -5,10 +5,15 @@
 //   3. If it's HTML, look for <link rel="alternate" type="application/rss+xml|atom+xml"> in the head.
 //   4. Otherwise, probe a short list of common feed paths on the same origin.
 // Never fabricates a feed URL: if nothing is found, it reports that clearly.
+// All requests go through safeFetch, so SSRF protection and per-redirect-hop
+// revalidation apply here too, not just to the RSS parser and article extractor.
+
+import { safeFetch, readBodyWithLimit, validateUrlForFetch, UnsafeUrlError } from "./safeFetch";
 
 const COMMON_FEED_PATHS = ["/feed", "/feed/", "/rss", "/rss.xml", "/feed.xml", "/atom.xml"];
 const FETCH_TIMEOUT_MS = 10000;
 const PROBE_TIMEOUT_MS = 6000;
+const MAX_DOC_BYTES = 5 * 1024 * 1024;
 
 interface FetchedDoc {
   ok: boolean;
@@ -20,23 +25,26 @@ interface FetchedDoc {
 
 async function fetchDoc(url: string, timeoutMs: number): Promise<FetchedDoc | null> {
   try {
-    const res = await fetch(url, {
+    const { response, finalUrl } = await safeFetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; ArchNewsReader/1.0)",
         Accept: "application/rss+xml, application/atom+xml, text/html, application/xhtml+xml, */*",
       },
-      redirect: "follow",
-      signal: AbortSignal.timeout(timeoutMs),
+      timeoutMs,
     });
-    const text = await res.text();
+    const buf = await readBodyWithLimit(response, MAX_DOC_BYTES);
     return {
-      ok: res.ok,
-      status: res.status,
-      contentType: res.headers.get("content-type") || "",
-      text,
-      finalUrl: res.url || url,
+      ok: response.ok,
+      status: response.status,
+      contentType: response.headers.get("content-type") || "",
+      text: new TextDecoder("utf-8").decode(buf),
+      finalUrl,
     };
   } catch {
+    // Covers network errors, timeouts, and SSRF rejections alike — a probe
+    // candidate (autodiscovery link, common path guess) failing just means "not
+    // this one, try the next"; only the user's own direct input gets a specific
+    // SSRF error message, checked separately in discoverFeed() below.
     return null;
   }
 }
@@ -78,12 +86,10 @@ export type DiscoveryResult = { ok: true; feedUrl: string } | { ok: false; error
 export async function discoverFeed(inputUrl: string): Promise<DiscoveryResult> {
   let parsed: URL;
   try {
-    parsed = new URL(inputUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return { ok: false, error: "網址必須是 http:// 或 https://" };
-    }
-  } catch {
-    return { ok: false, error: "網址格式不正確" };
+    const validated = await validateUrlForFetch(inputUrl);
+    parsed = validated.url;
+  } catch (err) {
+    return { ok: false, error: err instanceof UnsafeUrlError ? err.message : "網址格式不正確" };
   }
 
   const direct = await fetchDoc(parsed.toString(), FETCH_TIMEOUT_MS);

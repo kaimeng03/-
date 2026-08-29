@@ -1,7 +1,16 @@
+import { NextRequest } from "next/server";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { FEEDS_CACHE_TAG } from "@/lib/feeds";
+import { checkRateLimit } from "@/lib/apiGuard";
 
-export async function POST() {
+export const runtime = "nodejs";
+
+export async function POST(req: NextRequest) {
+  // Public (no admin login needed to refresh), but still rate-limited — a manual
+  // refresh forces real network fetches against every configured RSS feed.
+  const rateLimitError = checkRateLimit(req, "refresh", 6, 60 * 1000);
+  if (rateLimitError) return rateLimitError;
+
   // revalidateTag purges the underlying per-feed fetch() cache entries (which are
   // otherwise fresh for up to 15 minutes), so the next render performs a genuine
   // network re-fetch of every RSS feed rather than reusing stale data. This runs in

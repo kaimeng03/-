@@ -7,8 +7,15 @@ export interface Source {
   id: string;
   name: string;
   homepage: string;
+  /** For type "html" sources this is unused for fetching (kept for display/back-compat). */
   feedUrl: string;
   categoryId: string;
+  /** Missing/undefined means "rss" — existing sources.json files don't need migrating. */
+  type?: "rss" | "html";
+  /** The page an "html" adapter scrapes. Required when type is "html". */
+  pageUrl?: string;
+  /** Which adapter (see src/lib/adapters) handles this source when type is "html". */
+  adapter?: string;
 }
 
 export interface SourcesConfig {

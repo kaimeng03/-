@@ -3,10 +3,21 @@ import path from "path";
 import Parser from "rss-parser";
 import { FALLBACK_CONFIG, type Category, type Source, type SourcesConfig } from "./sources";
 import { discoverFeed } from "./feedDiscovery";
+import { safeFetch, readBodyWithLimit, UnsafeUrlError } from "./safeFetch";
 
 const LOCAL_FILE = path.join(process.cwd(), "data", "sources.json");
 const GITHUB_API = "https://api.github.com";
 const DATA_PATH = "data/sources.json";
+
+export class NotFoundError extends Error {}
+export class CategoryNotEmptyError extends Error {
+  sourceCount: number;
+  constructor(sourceCount: number) {
+    super(`Category still has ${sourceCount} source(s)`);
+    this.sourceCount = sourceCount;
+  }
+}
+class GithubConflictError extends Error {}
 
 function githubConfig() {
   const token = process.env.GITHUB_TOKEN;
@@ -36,8 +47,8 @@ function normalizeUrl(url: string): string {
   try {
     const u = new URL(url);
     u.hash = "";
-    const path = u.pathname.replace(/\/+$/, "");
-    return `${u.protocol}//${u.host}${path}${u.search}`.toLowerCase();
+    const p = u.pathname.replace(/\/+$/, "");
+    return `${u.protocol}//${u.host}${p}${u.search}`.toLowerCase();
   } catch {
     return url.trim().toLowerCase();
   }
@@ -92,6 +103,9 @@ async function writeToGithub(config: SourcesConfig, sha: string | null, message:
     },
     body: JSON.stringify(body),
   });
+  if (res.status === 409) {
+    throw new GithubConflictError("GitHub sha conflict — the file changed since it was read");
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`GitHub write failed: HTTP ${res.status} ${text}`);
@@ -122,30 +136,51 @@ export async function getSourcesConfig(): Promise<SourcesConfig> {
   return readLocal();
 }
 
-export async function validateFeedUrl(feedUrl: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  let parsed: URL;
-  try {
-    parsed = new URL(feedUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return { ok: false, error: "網址必須是 http:// 或 https://" };
-    }
-  } catch {
-    return { ok: false, error: "網址格式不正確" };
-  }
+/**
+ * Reads the current config, applies `mutate`, and writes the result back. On a
+ * GitHub sha conflict (someone else wrote in between the read and this write) it
+ * re-reads and retries exactly once — a plausible race for a single-admin tool,
+ * not something worth an unbounded retry loop.
+ */
+async function mutateConfig<T>(
+  mutate: (content: SourcesConfig) => { updated: SourcesConfig; result: T; message: string },
+): Promise<T> {
+  const gh = githubConfig();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { content, sha } = gh ? await readFromGithub() : { content: await readLocal(), sha: null };
+    const { updated, result, message } = mutate(content);
 
+    if (gh) {
+      try {
+        await writeToGithub(updated, sha, message);
+        return result;
+      } catch (err) {
+        if (err instanceof GithubConflictError && attempt === 0) continue;
+        throw err;
+      }
+    }
+    await writeLocal(updated);
+    return result;
+  }
+  throw new Error("寫入失敗，請稍後再試");
+}
+
+export async function validateFeedUrl(feedUrl: string): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    const res = await fetch(parsed.toString(), {
+    const { response } = await safeFetch(feedUrl, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; ArchNewsReader/1.0)" },
-      signal: AbortSignal.timeout(10000),
+      timeoutMs: 10000,
     });
-    if (!res.ok) return { ok: false, error: `無法讀取這個網址 (HTTP ${res.status})` };
-    const xml = await res.text();
+    if (!response.ok) return { ok: false, error: `無法讀取這個網址 (HTTP ${response.status})` };
+    const buf = await readBodyWithLimit(response, 5 * 1024 * 1024);
+    const xml = new TextDecoder("utf-8").decode(buf);
     const feed = await new Parser().parseString(xml);
     if (!feed.items || feed.items.length === 0) {
       return { ok: false, error: "這個網址看起來不是有效的 RSS feed" };
     }
     return { ok: true };
-  } catch {
+  } catch (err) {
+    if (err instanceof UnsafeUrlError) return { ok: false, error: err.message };
     return { ok: false, error: "無法解析這個網址的 RSS 內容，請確認是不是正確的 RSS feed 網址" };
   }
 }
@@ -154,27 +189,19 @@ export async function addCategory(name: string): Promise<Category> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("分類名稱不能是空的");
 
-  const gh = githubConfig();
-  const { content, sha } = gh ? await readFromGithub() : { content: await readLocal(), sha: null };
-
-  const existingIds = new Set(content.categories.map((c) => c.id));
-  const id = uniqueId(slugify(trimmed), existingIds);
-  const category: Category = { id, name: trimmed };
-  const updated: SourcesConfig = { ...content, categories: [...content.categories, category] };
-
-  if (gh) {
-    await writeToGithub(updated, sha, `Add category: ${trimmed}`);
-  } else {
-    await writeLocal(updated);
-  }
-  return category;
+  return mutateConfig((content) => {
+    const existingIds = new Set(content.categories.map((c) => c.id));
+    const id = uniqueId(slugify(trimmed), existingIds);
+    const category: Category = { id, name: trimmed };
+    return {
+      updated: { ...content, categories: [...content.categories, category] },
+      result: category,
+      message: `Add category: ${trimmed}`,
+    };
+  });
 }
 
-export async function addSource(input: {
-  name: string;
-  feedUrl: string;
-  categoryId: string;
-}): Promise<Source> {
+export async function addSource(input: { name: string; feedUrl: string; categoryId: string }): Promise<Source> {
   const name = input.name.trim();
   const inputUrl = input.feedUrl.trim();
   if (!name) throw new Error("網站名稱不能是空的");
@@ -189,18 +216,6 @@ export async function addSource(input: {
 
   const validation = await validateFeedUrl(feedUrl);
   if (!validation.ok) throw new Error(validation.error);
-
-  const gh = githubConfig();
-  const { content, sha } = gh ? await readFromGithub() : { content: await readLocal(), sha: null };
-
-  if (!content.categories.some((c) => c.id === input.categoryId)) {
-    throw new Error("找不到這個分類");
-  }
-
-  const normalizedNew = normalizeUrl(feedUrl);
-  if (content.sources.some((s) => normalizeUrl(s.feedUrl) === normalizedNew)) {
-    throw new Error("這個新聞來源已經加入過了");
-  }
 
   let homepage = feedUrl;
   try {
@@ -217,15 +232,58 @@ export async function addSource(input: {
     }
   }
 
-  const existingIds = new Set(content.sources.map((s) => s.id));
-  const id = uniqueId(slugify(name), existingIds);
-  const source: Source = { id, name, homepage, feedUrl, categoryId: input.categoryId };
-  const updated: SourcesConfig = { ...content, sources: [...content.sources, source] };
+  return mutateConfig((content) => {
+    if (!content.categories.some((c) => c.id === input.categoryId)) {
+      throw new NotFoundError("找不到這個分類");
+    }
+    const normalizedNew = normalizeUrl(feedUrl);
+    if (content.sources.some((s) => normalizeUrl(s.feedUrl) === normalizedNew)) {
+      throw new Error("這個新聞來源已經加入過了");
+    }
 
-  if (gh) {
-    await writeToGithub(updated, sha, `Add source: ${name}`);
-  } else {
-    await writeLocal(updated);
-  }
-  return source;
+    const existingIds = new Set(content.sources.map((s) => s.id));
+    const id = uniqueId(slugify(name), existingIds);
+    const source: Source = { id, name, homepage, feedUrl, categoryId: input.categoryId };
+    return {
+      updated: { ...content, sources: [...content.sources, source] },
+      result: source,
+      message: `Add source: ${name}`,
+    };
+  });
+}
+
+export async function removeSource(id: string): Promise<void> {
+  await mutateConfig((content) => {
+    const target = content.sources.find((s) => s.id === id);
+    if (!target) throw new NotFoundError("找不到這個網站來源");
+    return {
+      updated: { ...content, sources: content.sources.filter((s) => s.id !== id) },
+      result: undefined,
+      message: `Remove source: ${target.name}`,
+    };
+  });
+}
+
+export async function removeCategory(id: string, options: { force?: boolean } = {}): Promise<void> {
+  await mutateConfig((content) => {
+    const target = content.categories.find((c) => c.id === id);
+    if (!target) throw new NotFoundError("找不到這個分類");
+
+    const sourcesInCategory = content.sources.filter((s) => s.categoryId === id);
+    if (sourcesInCategory.length > 0 && !options.force) {
+      throw new CategoryNotEmptyError(sourcesInCategory.length);
+    }
+
+    return {
+      updated: {
+        categories: content.categories.filter((c) => c.id !== id),
+        sources: content.sources.filter((s) => s.categoryId !== id),
+      },
+      result: undefined,
+      message:
+        sourcesInCategory.length > 0
+          ? `Remove category: ${target.name} (and ${sourcesInCategory.length} source(s))`
+          : `Remove category: ${target.name}`,
+    };
+  });
 }
