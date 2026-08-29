@@ -4,6 +4,7 @@ export interface Article {
   link: string;
   sourceId: string;
   sourceName: string;
+  categoryId: string;
   pubDate: string | null;
   summary: string;
   thumbnail: string | null;

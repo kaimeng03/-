@@ -1,6 +1,7 @@
 import Parser from "rss-parser";
 import crypto from "crypto";
 import { SOURCES, type Source } from "./sources";
+import { translateMany } from "./translate";
 import type { Article } from "./types";
 
 type FeedItem = Parser.Item & {
@@ -73,6 +74,7 @@ async function fetchSourceArticles(source: Source): Promise<Article[]> {
         link,
         sourceId: source.id,
         sourceName: source.name,
+        categoryId: source.categoryId,
         pubDate: item.isoDate || item.pubDate || null,
         summary: rawSummary.slice(0, 220),
         thumbnail: extractThumbnail(item),
@@ -92,5 +94,15 @@ export async function fetchAllArticles(): Promise<Article[]> {
     const tb = b.pubDate ? new Date(b.pubDate).getTime() : 0;
     return tb - ta;
   });
-  return all;
+  return translateArticles(all);
+}
+
+async function translateArticles(articles: Article[]): Promise<Article[]> {
+  const texts = articles.flatMap((a) => [a.title, a.summary]);
+  const translated = await translateMany(texts);
+  return articles.map((a, i) => ({
+    ...a,
+    title: translated[i * 2] || a.title,
+    summary: translated[i * 2 + 1] || a.summary,
+  }));
 }

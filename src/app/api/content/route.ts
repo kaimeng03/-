@@ -10,9 +10,14 @@ export async function GET(req: NextRequest) {
   }
   try {
     const article = await extractArticle(url);
-    return Response.json(article);
+    return Response.json(article, {
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "擷取內文失敗";
-    return Response.json({ error: message }, { status: 502 });
+    return Response.json(
+      { error: message },
+      { status: 502, headers: { "Content-Type": "application/json; charset=utf-8" } },
+    );
   }
 }

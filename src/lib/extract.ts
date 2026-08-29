@@ -1,7 +1,29 @@
 import { JSDOM, VirtualConsole } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import { assertPublicHttpUrl } from "./safeFetch";
+import { translateMany, translateText } from "./translate";
 import type { ExtractedContent } from "./types";
+
+const TRANSLATABLE_BLOCKS_SELECTOR =
+  "p, h1, h2, h3, h4, h5, h6, li, figcaption, dd, dt, td, th";
+
+async function translateContentBlocks(contentHtml: string): Promise<string> {
+  const fragmentDom = new JSDOM(`<div id="root">${contentHtml}</div>`, {
+    virtualConsole: new VirtualConsole(),
+  });
+  const root = fragmentDom.window.document.getElementById("root")!;
+  const blocks = Array.from(root.querySelectorAll(TRANSLATABLE_BLOCKS_SELECTOR)).filter(
+    (el) => (el.textContent || "").trim().length > 0 && !el.querySelector(TRANSLATABLE_BLOCKS_SELECTOR),
+  );
+
+  const texts = blocks.map((el) => el.textContent || "");
+  const translated = await translateMany(texts);
+  blocks.forEach((el, i) => {
+    el.textContent = translated[i];
+  });
+
+  return root.innerHTML;
+}
 
 function rewriteImageUrls(html: string, baseUrl: string): string {
   return html.replace(/<img\b[^>]*>/gi, (imgTag) => {
@@ -55,10 +77,17 @@ export async function extractArticle(url: string): Promise<ExtractedContent> {
     throw new Error("無法擷取完整內文");
   }
 
+  const [translatedTitle, translatedContentHtml] = await Promise.all([
+    parsedArticle.title
+      ? translateText(parsedArticle.title).catch(() => parsedArticle.title)
+      : Promise.resolve(""),
+    translateContentBlocks(parsedArticle.content),
+  ]);
+
   return {
-    title: parsedArticle.title || "",
+    title: translatedTitle || parsedArticle.title || "",
     byline: parsedArticle.byline || null,
-    html: rewriteImageUrls(parsedArticle.content, parsed.toString()),
+    html: rewriteImageUrls(translatedContentHtml, parsed.toString()),
     siteName: parsedArticle.siteName || null,
   };
 }
