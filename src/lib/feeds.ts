@@ -67,46 +67,66 @@ interface RawArticle {
   summaryEn: string;
 }
 
+export const FEEDS_CACHE_TAG = "feeds";
+
 async function fetchSourceArticles(source: Source): Promise<RawArticle[]> {
-  try {
-    const res = await fetch(source.feedUrl, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; ArchNewsReader/1.0)" },
-      next: { revalidate: 900 },
-    });
-    if (!res.ok) return [];
-    const xml = await res.text();
-    const feed = await parser.parseString(xml);
-    return (feed.items as FeedItem[]).map((item) => {
-      const link = item.link || "";
-      const rawSummary =
-        item.contentSnippet || stripHtml(item.summary || item.content || "");
-      return {
-        id: makeId(link),
-        link,
-        sourceId: source.id,
-        sourceName: source.name,
-        categoryId: source.categoryId,
-        pubDate: item.isoDate || item.pubDate || null,
-        thumbnail: extractThumbnail(item),
-        titleEn: item.title || "(無標題)",
-        summaryEn: rawSummary.slice(0, 220),
-      };
-    });
-  } catch (err) {
-    console.error(`Failed to fetch feed for ${source.name}:`, err);
-    return [];
+  const res = await fetch(source.feedUrl, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; ArchNewsReader/1.0)" },
+    // Tagged so a manual refresh can call revalidateTag(FEEDS_CACHE_TAG) to force
+    // a genuine re-fetch instead of serving the 15-minute-old cached response.
+    next: { revalidate: 900, tags: [FEEDS_CACHE_TAG] },
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
   }
+  const xml = await res.text();
+  const feed = await parser.parseString(xml);
+  return (feed.items as FeedItem[]).map((item) => {
+    const link = item.link || "";
+    const rawSummary = item.contentSnippet || stripHtml(item.summary || item.content || "");
+    return {
+      id: makeId(link),
+      link,
+      sourceId: source.id,
+      sourceName: source.name,
+      categoryId: source.categoryId,
+      pubDate: item.isoDate || item.pubDate || null,
+      thumbnail: extractThumbnail(item),
+      titleEn: item.title || "(無標題)",
+      summaryEn: rawSummary.slice(0, 220),
+    };
+  });
 }
 
-export async function fetchAllArticles(sources: Source[]): Promise<Article[]> {
-  const results = await Promise.all(sources.map(fetchSourceArticles));
-  const all = results.flat();
-  all.sort((a, b) => {
+export interface FetchAllArticlesResult {
+  articles: Article[];
+  failedSourceNames: string[];
+}
+
+export async function fetchAllArticles(sources: Source[]): Promise<FetchAllArticlesResult> {
+  // allSettled: one source's feed being down (network error, bad XML, non-200) must
+  // never prevent the other sources' articles from showing up.
+  const results = await Promise.allSettled(sources.map(fetchSourceArticles));
+
+  const raw: RawArticle[] = [];
+  const failedSourceNames: string[] = [];
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") {
+      raw.push(...result.value);
+    } else {
+      console.error(`Failed to fetch feed for ${sources[i].name}:`, result.reason);
+      failedSourceNames.push(sources[i].name);
+    }
+  });
+
+  raw.sort((a, b) => {
     const ta = a.pubDate ? new Date(a.pubDate).getTime() : 0;
     const tb = b.pubDate ? new Date(b.pubDate).getTime() : 0;
     return tb - ta;
   });
-  return translateArticles(all);
+
+  const articles = await translateArticles(raw);
+  return { articles, failedSourceNames };
 }
 
 async function translateArticles(articles: RawArticle[]): Promise<Article[]> {

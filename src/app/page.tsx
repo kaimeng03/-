@@ -6,6 +6,16 @@ export const revalidate = 900;
 
 export default async function Home() {
   const { categories, sources } = await getSourcesConfig();
-  const articles = await fetchAllArticles(sources);
-  return <NewsApp initialArticles={articles} categories={categories} sources={sources} />;
+  const { articles, failedSourceNames } = await fetchAllArticles(sources);
+  const lastUpdated = new Date().toISOString();
+
+  return (
+    <NewsApp
+      initialArticles={articles}
+      categories={categories}
+      sources={sources}
+      failedSourceNames={failedSourceNames}
+      lastUpdated={lastUpdated}
+    />
+  );
 }

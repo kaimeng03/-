@@ -19,7 +19,12 @@ export async function GET(req: NextRequest) {
         Referer: `${parsed.protocol}//${parsed.hostname}/`,
         Accept: "image/*",
       },
-      next: { revalidate: 86400 },
+      // Images are streamed straight through, not parsed as JSON/text, and can be
+      // several MB — Next's fetch Data Cache silently refuses (and warns on) any
+      // entry over 2MB, so it's the wrong cache for this passthrough. The
+      // Cache-Control header on our own response below is what actually caches
+      // these for the browser/CDN.
+      cache: "no-store",
     });
 
     if (!upstream.ok || !upstream.body) {

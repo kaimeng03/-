@@ -1,14 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import type { Article, ExtractedContent } from "@/lib/types";
 import type { Category, Source } from "@/lib/sources";
 import ArticleReader from "@/components/ArticleReader";
 import { formatRelativeTime } from "@/lib/formatTime";
+import { t } from "@/lib/i18n";
+import { useLang } from "@/lib/useLang";
 
 type Filter = { type: "all" } | { type: "category"; id: string } | { type: "source"; id: string };
-type Lang = "zh" | "en";
+
+const REFRESH_TIMEOUT_MS = 15000;
+const REFRESHED_FLASH_MS = 2500;
 
 function proxied(url: string | null): string | null {
   if (!url) return null;
@@ -19,24 +24,54 @@ export default function NewsApp({
   initialArticles,
   categories,
   sources,
+  failedSourceNames,
+  lastUpdated,
 }: {
   initialArticles: Article[];
   categories: Category[];
   sources: Source[];
+  failedSourceNames: string[];
+  lastUpdated: string;
 }) {
   const router = useRouter();
   const articles = initialArticles;
-  const [lang, setLang] = useState<Lang>("zh");
+  const [lang, setLang] = useLang();
   const [filter, setFilter] = useState<Filter>({ type: "all" });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selected, setSelected] = useState<Article | null>(null);
   const [content, setContent] = useState<ExtractedContent | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const [refreshing, setRefreshing] = useState(false);
+  const [justRefreshed, setJustRefreshed] = useState(false);
+  const seenUpdatedAt = useRef(lastUpdated);
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [addingCategory, setAddingCategory] = useState(false);
   const [addingSource, setAddingSource] = useState(false);
+
+  // The click handler can't await router.refresh() (it returns void), so instead
+  // we watch for the `lastUpdated` prop to actually change — that only happens once
+  // page.tsx has genuinely re-run fetchAllArticles(), which is the real signal that
+  // the refresh completed (not just that some time passed).
+  useEffect(() => {
+    if (refreshing && lastUpdated !== seenUpdatedAt.current) {
+      seenUpdatedAt.current = lastUpdated;
+      setRefreshing(false);
+      setJustRefreshed(true);
+      if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+      const flashTimer = setTimeout(() => setJustRefreshed(false), REFRESHED_FLASH_MS);
+      return () => clearTimeout(flashTimer);
+    }
+    seenUpdatedAt.current = lastUpdated;
+  }, [lastUpdated, refreshing]);
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+    };
+  }, []);
 
   const filtered = useMemo(() => {
     if (filter.type === "all") return articles;
@@ -67,14 +102,22 @@ export default function NewsApp({
   }
 
   async function refresh() {
+    if (refreshing) return;
     setRefreshing(true);
+    setJustRefreshed(false);
+
+    // Safety net: if the expected re-render never arrives (offline, server error),
+    // don't leave the button stuck showing "refreshing" forever.
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+    refreshTimeoutRef.current = setTimeout(() => setRefreshing(false), REFRESH_TIMEOUT_MS);
+
     try {
       await fetch("/api/refresh", { method: "POST" });
     } catch {
-      // ignore, router.refresh() below still re-renders with whatever is cached
+      // Even if this call fails, still ask the router to re-render — worst case
+      // it serves the still-cached data and the timeout above clears the spinner.
     }
     router.refresh();
-    setTimeout(() => setRefreshing(false), 800);
   }
 
   return (
@@ -84,23 +127,38 @@ export default function NewsApp({
           <button
             onClick={() => setSidebarOpen(true)}
             className="rounded-md border border-black/10 px-2.5 py-1.5 text-sm text-neutral-600 hover:bg-black/5 md:hidden dark:border-white/15 dark:text-neutral-300 dark:hover:bg-white/10"
-            aria-label="開啟分類選單"
+            aria-label={t(lang, "openMenu")}
           >
             ☰
           </button>
-          <h1 className="text-lg font-semibold tracking-tight">建築新聞</h1>
+          <h1 className="text-lg font-semibold tracking-tight">{t(lang, "appTitle")}</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* toLocaleTimeString is timezone-dependent, so the server render (e.g. UTC on
+              Vercel) and the browser's render can legitimately print different text.
+              suppressHydrationWarning is React's documented mechanism for exactly this
+              case — a real client/server difference, not a bug to paper over. */}
+          <span className="hidden text-xs text-neutral-400 sm:inline" suppressHydrationWarning>
+            {t(lang, "lastUpdated", {
+              time: new Date(lastUpdated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            })}
+          </span>
           <LangToggle lang={lang} onChange={setLang} />
           <button
             onClick={refresh}
             disabled={refreshing}
             className="rounded-md border border-black/10 px-3 py-1.5 text-sm text-neutral-600 transition hover:bg-black/5 disabled:opacity-50 dark:border-white/15 dark:text-neutral-300 dark:hover:bg-white/10"
           >
-            {refreshing ? "更新中…" : "重新整理"}
+            {refreshing ? t(lang, "refreshing") : justRefreshed ? t(lang, "refreshed") : t(lang, "refresh")}
           </button>
         </div>
       </header>
+
+      {failedSourceNames.length > 0 && (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          {t(lang, "sourcesFailedNotice", { names: failedSourceNames.join("、") })}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         <aside
@@ -109,11 +167,11 @@ export default function NewsApp({
           } overflow-y-auto bg-white p-3 dark:bg-neutral-950 md:static md:z-auto md:block md:w-64 md:shrink-0 md:border-r md:border-black/10 dark:md:border-white/10`}
         >
           <div className="mb-2 flex items-center justify-between md:hidden">
-            <span className="text-sm font-medium text-neutral-500">分類</span>
+            <span className="text-sm font-medium text-neutral-500">{t(lang, "categoriesLabel")}</span>
             <button
               onClick={() => setSidebarOpen(false)}
               className="rounded-md px-2 py-1 text-sm text-neutral-500 hover:bg-black/5 dark:hover:bg-white/10"
-              aria-label="關閉分類選單"
+              aria-label={t(lang, "closeMenu")}
             >
               ✕
             </button>
@@ -123,10 +181,11 @@ export default function NewsApp({
             onClick={() => setAddingSource((v) => !v)}
             className="mb-3 w-full rounded-md border border-dashed border-black/20 px-2 py-1.5 text-left text-sm font-medium text-neutral-600 transition hover:bg-black/5 dark:border-white/20 dark:text-neutral-300 dark:hover:bg-white/10"
           >
-            ＋ 新增網站
+            {t(lang, "addWebsite")}
           </button>
           {addingSource && (
             <AddSourceForm
+              lang={lang}
               categories={categories}
               onDone={() => {
                 setAddingSource(false);
@@ -137,7 +196,7 @@ export default function NewsApp({
           )}
 
           <SidebarButton
-            label="全部文章"
+            label={t(lang, "allArticles")}
             active={filter.type === "all"}
             onClick={() => selectFilter({ type: "all" })}
           />
@@ -175,6 +234,7 @@ export default function NewsApp({
             <div>
               {addingCategory ? (
                 <AddCategoryForm
+                  lang={lang}
                   onDone={() => {
                     setAddingCategory(false);
                     router.refresh();
@@ -186,7 +246,7 @@ export default function NewsApp({
                   onClick={() => setAddingCategory(true)}
                   className="w-full rounded-md px-2 py-1.5 text-left text-sm text-neutral-500 transition hover:bg-black/5 dark:hover:bg-white/10"
                 >
-                  ＋ 新增分類
+                  {t(lang, "addCategory")}
                 </button>
               )}
             </div>
@@ -199,9 +259,7 @@ export default function NewsApp({
           }`}
         >
           {filtered.length === 0 && (
-            <li className="p-6 text-center text-sm text-neutral-500">
-              目前沒有文章，稍後再試試「重新整理」。
-            </li>
+            <li className="p-6 text-center text-sm text-neutral-500">{t(lang, "noArticles")}</li>
           )}
           {filtered.map((a) => (
             <li key={a.id}>
@@ -212,12 +270,13 @@ export default function NewsApp({
                 }`}
               >
                 {a.thumbnail && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={proxied(a.thumbnail) ?? undefined}
+                  <Image
+                    src={proxied(a.thumbnail) ?? ""}
                     alt=""
+                    width={80}
+                    height={64}
+                    unoptimized
                     className="h-16 w-20 shrink-0 rounded-md object-cover bg-black/5 dark:bg-white/10"
-                    loading="lazy"
                   />
                 )}
                 <div className="min-w-0 flex-1">
@@ -252,11 +311,12 @@ export default function NewsApp({
   );
 }
 
-function LangToggle({ lang, onChange }: { lang: Lang; onChange: (l: Lang) => void }) {
+function LangToggle({ lang, onChange }: { lang: "zh" | "en"; onChange: (l: "zh" | "en") => void }) {
   return (
     <div className="flex overflow-hidden rounded-md border border-black/10 text-sm dark:border-white/15">
       <button
         onClick={() => onChange("zh")}
+        aria-pressed={lang === "zh"}
         className={`px-2.5 py-1.5 transition ${
           lang === "zh"
             ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
@@ -267,6 +327,7 @@ function LangToggle({ lang, onChange }: { lang: Lang; onChange: (l: Lang) => voi
       </button>
       <button
         onClick={() => onChange("en")}
+        aria-pressed={lang === "en"}
         className={`px-2.5 py-1.5 transition ${
           lang === "en"
             ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
@@ -304,7 +365,15 @@ function SidebarButton({
   );
 }
 
-function AddCategoryForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+function AddCategoryForm({
+  lang,
+  onDone,
+  onCancel,
+}: {
+  lang: "zh" | "en";
+  onDone: () => void;
+  onCancel: () => void;
+}) {
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -320,10 +389,10 @@ function AddCategoryForm({ onDone, onCancel }: { onDone: () => void; onCancel: (
         body: JSON.stringify({ name }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "新增失敗");
+      if (!res.ok) throw new Error(data.error || t(lang, "genericAddCategoryError"));
       onDone();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "新增失敗");
+      setError(err instanceof Error ? err.message : t(lang, "genericAddCategoryError"));
     } finally {
       setSubmitting(false);
     }
@@ -335,7 +404,7 @@ function AddCategoryForm({ onDone, onCancel }: { onDone: () => void; onCancel: (
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="分類名稱，例如：室內設計"
+        placeholder={t(lang, "categoryNamePlaceholder")}
         className="w-full rounded-md border border-black/10 bg-transparent px-2 py-1 text-sm outline-none focus:border-neutral-400 dark:border-white/15"
       />
       {error && <p className="text-xs text-red-500">{error}</p>}
@@ -345,14 +414,14 @@ function AddCategoryForm({ onDone, onCancel }: { onDone: () => void; onCancel: (
           disabled={submitting || !name.trim()}
           className="flex-1 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
         >
-          {submitting ? "新增中…" : "新增"}
+          {submitting ? t(lang, "adding") : t(lang, "add")}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="flex-1 rounded-md border border-black/10 px-2 py-1 text-xs dark:border-white/15"
         >
-          取消
+          {t(lang, "cancel")}
         </button>
       </div>
     </form>
@@ -360,10 +429,12 @@ function AddCategoryForm({ onDone, onCancel }: { onDone: () => void; onCancel: (
 }
 
 function AddSourceForm({
+  lang,
   categories,
   onDone,
   onCancel,
 }: {
+  lang: "zh" | "en";
   categories: Category[];
   onDone: () => void;
   onCancel: () => void;
@@ -385,19 +456,17 @@ function AddSourceForm({
         body: JSON.stringify({ name, feedUrl, categoryId }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "新增失敗");
+      if (!res.ok) throw new Error(data.error || t(lang, "genericAddSourceError"));
       onDone();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "新增失敗");
+      setError(err instanceof Error ? err.message : t(lang, "genericAddSourceError"));
     } finally {
       setSubmitting(false);
     }
   }
 
   if (categories.length === 0) {
-    return (
-      <p className="mb-3 text-xs text-neutral-500">請先新增一個分類，才能加入網站。</p>
-    );
+    return <p className="mb-3 text-xs text-neutral-500">{t(lang, "needCategoryFirst")}</p>;
   }
 
   return (
@@ -406,13 +475,13 @@ function AddSourceForm({
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="網站名稱"
+        placeholder={t(lang, "websiteNamePlaceholder")}
         className="w-full rounded-md border border-black/10 bg-transparent px-2 py-1 text-sm outline-none focus:border-neutral-400 dark:border-white/15"
       />
       <input
         value={feedUrl}
         onChange={(e) => setFeedUrl(e.target.value)}
-        placeholder="RSS 網址 (https://...)"
+        placeholder={t(lang, "feedUrlPlaceholder")}
         className="w-full rounded-md border border-black/10 bg-transparent px-2 py-1 text-sm outline-none focus:border-neutral-400 dark:border-white/15"
       />
       <select
@@ -433,14 +502,14 @@ function AddSourceForm({
           disabled={submitting || !name.trim() || !feedUrl.trim()}
           className="flex-1 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
         >
-          {submitting ? "驗證並新增中…" : "新增"}
+          {submitting ? t(lang, "addingSource") : t(lang, "add")}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="flex-1 rounded-md border border-black/10 px-2 py-1 text-xs dark:border-white/15"
         >
-          取消
+          {t(lang, "cancel")}
         </button>
       </div>
     </form>

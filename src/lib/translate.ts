@@ -131,14 +131,29 @@ export async function translateMany(texts: string[], targetLang = "zh-TW"): Prom
     }
   }
 
-  return mapWithConcurrency(texts, 4, async (t) => {
+  let failureCount = 0;
+  let firstFailure: unknown = null;
+  const result = await mapWithConcurrency(texts, 4, async (t) => {
     try {
       return await translateOneMyMemory(t, targetLang);
     } catch (err) {
-      console.error("Translation failed, using original text:", err);
+      failureCount++;
+      firstFailure ??= err;
       return t;
     }
   });
+
+  // One summary line instead of one stack trace per failed chunk — MyMemory's free
+  // tier rate-limits hard under real load, so a batch of 100+ articles can otherwise
+  // print hundreds of near-identical errors for what is really a single condition.
+  if (failureCount > 0) {
+    console.error(
+      `Translation fell back to original text for ${failureCount}/${texts.length} item(s). First error:`,
+      firstFailure,
+    );
+  }
+
+  return result;
 }
 
 export async function translateText(text: string, targetLang = "zh-TW"): Promise<string> {

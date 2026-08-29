@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import Parser from "rss-parser";
 import { FALLBACK_CONFIG, type Category, type Source, type SourcesConfig } from "./sources";
+import { discoverFeed } from "./feedDiscovery";
 
 const LOCAL_FILE = path.join(process.cwd(), "data", "sources.json");
 const GITHUB_API = "https://api.github.com";
@@ -29,6 +30,17 @@ function uniqueId(base: string, existingIds: Set<string>): string {
   let i = 2;
   while (existingIds.has(`${base}-${i}`)) i++;
   return `${base}-${i}`;
+}
+
+function normalizeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    const path = u.pathname.replace(/\/+$/, "");
+    return `${u.protocol}//${u.host}${path}${u.search}`.toLowerCase();
+  } catch {
+    return url.trim().toLowerCase();
+  }
 }
 
 interface GithubFile {
@@ -164,9 +176,16 @@ export async function addSource(input: {
   categoryId: string;
 }): Promise<Source> {
   const name = input.name.trim();
-  const feedUrl = input.feedUrl.trim();
+  const inputUrl = input.feedUrl.trim();
   if (!name) throw new Error("網站名稱不能是空的");
-  if (!feedUrl) throw new Error("RSS 網址不能是空的");
+  if (!inputUrl) throw new Error("網址不能是空的");
+
+  // Accept either a direct RSS/Atom feed URL or a plain website homepage URL —
+  // discoverFeed tries the URL as-is first, then HTML <link> autodiscovery,
+  // then a short list of common feed paths. It never invents a feed URL.
+  const discovery = await discoverFeed(inputUrl);
+  if (!discovery.ok) throw new Error(discovery.error);
+  const feedUrl = discovery.feedUrl;
 
   const validation = await validateFeedUrl(feedUrl);
   if (!validation.ok) throw new Error(validation.error);
@@ -178,12 +197,24 @@ export async function addSource(input: {
     throw new Error("找不到這個分類");
   }
 
+  const normalizedNew = normalizeUrl(feedUrl);
+  if (content.sources.some((s) => normalizeUrl(s.feedUrl) === normalizedNew)) {
+    throw new Error("這個新聞來源已經加入過了");
+  }
+
   let homepage = feedUrl;
   try {
-    const u = new URL(feedUrl);
-    homepage = `${u.protocol}//${u.hostname}`;
+    // Prefer the origin of what the user actually typed (often the homepage),
+    // falling back to the discovered feed's origin if that's not parseable.
+    const u = new URL(inputUrl);
+    homepage = `${u.protocol}//${u.host}`;
   } catch {
-    // keep feedUrl as fallback
+    try {
+      const u = new URL(feedUrl);
+      homepage = `${u.protocol}//${u.host}`;
+    } catch {
+      // keep feedUrl as last-resort fallback
+    }
   }
 
   const existingIds = new Set(content.sources.map((s) => s.id));
