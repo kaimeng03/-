@@ -30,6 +30,9 @@
     "rss-parser": "^3.13.0",
     "sanitize-html": "^2.17.7"
   },
+  "overrides": {
+    "html-encoding-sniffer": "4.0.0"
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^7.0.1",
