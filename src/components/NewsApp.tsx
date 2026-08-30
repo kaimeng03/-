@@ -3,28 +3,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
+import Link from "next/link";
 import type { Article, ExtractedContent } from "@/lib/types";
 import type { Category, Source } from "@/lib/sources";
 import ArticleReader from "@/components/ArticleReader";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import AddSourceFlow from "@/components/AddSourceFlow";
 import { formatRelativeTime } from "@/lib/formatTime";
 import { t, type Lang } from "@/lib/i18n";
 import { useLang } from "@/lib/useLang";
 import { useReadState } from "@/lib/useReadState";
-import { useAdminSession } from "@/lib/useAdminSession";
 
 type Filter = { type: "all" } | { type: "category"; id: string } | { type: "source"; id: string };
 type View = "all" | "today" | "unread" | "saved";
 
-type PendingAction =
-  | { type: "add-source" }
-  | { type: "add-category" }
-  | { type: "remove-source"; source: Source }
-  | { type: "remove-category"; category: Category };
-
 type DialogState =
-  | { kind: "login-required" }
-  | { kind: "not-configured" }
   | { kind: "confirm-remove-source"; source: Source }
   | { kind: "confirm-remove-category-empty"; category: Category }
   | { kind: "confirm-remove-category-step1"; category: Category; count: number }
@@ -58,18 +51,22 @@ export default function NewsApp({
   sources,
   failedSourceNames,
   lastUpdated,
+  user,
+  signOutAction,
+  professionKey,
 }: {
   initialArticles: Article[];
   categories: Category[];
   sources: Source[];
   failedSourceNames: string[];
   lastUpdated: string;
+  user?: { name: string | null; email: string | null; image: string | null };
+  signOutAction?: () => Promise<void>;
+  professionKey?: string | null;
 }) {
   const router = useRouter();
   const articles = initialArticles;
   const [lang, setLang] = useLang();
-  const readState = useReadState();
-  const admin = useAdminSession();
 
   const [filter, setFilter] = useState<Filter>({ type: "all" });
   const [view, setView] = useState<View>("all");
@@ -86,13 +83,12 @@ export default function NewsApp({
 
   const [addingCategory, setAddingCategory] = useState(false);
   const [addingSource, setAddingSource] = useState(false);
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
 
-  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const readState = useReadState(setToast);
 
   useEffect(() => {
     document.documentElement.lang = lang === "zh" ? "zh-Hant" : "en";
@@ -160,7 +156,7 @@ export default function NewsApp({
     readState.markRead(article.id);
     try {
       if (article.contentMode === "feed-only") {
-        // HTML-adapter sources (e.g. twarchitect): the scraped content already IS
+        // Single-page adapters (e.g. twarchitect): the scraped content already IS
         // the article. There's no separate full-article page worth fetching, so
         // this renders straight from what fetchAllArticles() already gathered
         // instead of attempting (and failing) live extraction against a listing page.
@@ -220,28 +216,13 @@ export default function NewsApp({
     router.refresh();
   }
 
-  /** Gate for anything that mutates data: shows a clear reason and returns false
-   *  instead of silently doing nothing when the admin feature isn't usable yet. */
-  function requireAdminOrPrompt(action: PendingAction): boolean {
-    if (!admin.configured) {
-      setDialog({ kind: "not-configured" });
-      return false;
-    }
-    if (!admin.isAdmin) {
-      setPendingAction(action);
-      setDialog({ kind: "login-required" });
-      return false;
-    }
-    return true;
-  }
-
+  // Add/delete just work once logged in — page.tsx already requires a
+  // session to reach NewsApp at all, so there's no separate admin gate.
   function handleAddWebsiteClick() {
-    if (!requireAdminOrPrompt({ type: "add-source" })) return;
     setAddingSource((v) => !v);
   }
 
   function handleAddCategoryClick() {
-    if (!requireAdminOrPrompt({ type: "add-category" })) return;
     setAddingCategory(true);
   }
 
@@ -256,34 +237,12 @@ export default function NewsApp({
   }
 
   function requestRemoveSource(source: Source) {
-    if (!requireAdminOrPrompt({ type: "remove-source", source })) return;
     setDialogError(null);
     setDialog({ kind: "confirm-remove-source", source });
   }
 
   function requestRemoveCategory(category: Category) {
-    if (!requireAdminOrPrompt({ type: "remove-category", category })) return;
     openRemoveCategoryDialog(category);
-  }
-
-  /** Runs after a successful admin login: resumes whatever the user originally
-   *  clicked (auto-opens the add form, or re-shows the delete confirmation) rather
-   *  than silently dropping their intent and making them click twice. */
-  async function loginAndResumePendingAction(password: string): Promise<string | null> {
-    const err = await admin.login(password);
-    if (err) return err;
-
-    setDialog(null);
-    setShowAdminLogin(false);
-    const action = pendingAction;
-    setPendingAction(null);
-    if (action?.type === "add-source") setAddingSource(true);
-    else if (action?.type === "add-category") setAddingCategory(true);
-    else if (action?.type === "remove-source") {
-      setDialogError(null);
-      setDialog({ kind: "confirm-remove-source", source: action.source });
-    } else if (action?.type === "remove-category") openRemoveCategoryDialog(action.category);
-    return null;
   }
 
   async function doRemoveSource(source: Source) {
@@ -335,12 +294,6 @@ export default function NewsApp({
     }
   }
 
-  function loginRequiredMessage(): string {
-    if (pendingAction?.type === "add-source") return t(lang, "loginRequiredAddWebsite");
-    if (pendingAction?.type === "add-category") return t(lang, "loginRequiredAddCategory");
-    return t(lang, "manageSubscriptionsLoginRequired");
-  }
-
   return (
     <div className="flex h-dvh flex-col">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-black/10 px-4 py-3 dark:border-white/10">
@@ -362,6 +315,7 @@ export default function NewsApp({
             })}
           </span>
           <LangToggle lang={lang} onChange={setLang} />
+          {user && signOutAction && <UserMenu lang={lang} user={user} signOutAction={signOutAction} />}
           <button
             type="button"
             onClick={refresh}
@@ -439,10 +393,11 @@ export default function NewsApp({
           >
             {t(lang, "addWebsite")}
           </button>
-          {admin.isAdmin && addingSource && (
-            <AddSourceForm
+          {addingSource && (
+            <AddSourceFlow
               lang={lang}
               categories={categories}
+              initialProfessionKey={professionKey ?? null}
               onDone={() => {
                 setAddingSource(false);
                 router.refresh();
@@ -523,7 +478,7 @@ export default function NewsApp({
             })}
 
             <div>
-              {admin.isAdmin && addingCategory ? (
+              {addingCategory ? (
                 <AddCategoryForm
                   lang={lang}
                   onDone={() => {
@@ -544,18 +499,6 @@ export default function NewsApp({
             </div>
           </div>
 
-          <div className="mt-6 border-t border-black/10 pt-3 dark:border-white/10">
-            {admin.checked && admin.configured && (
-              <AdminLoginArea
-                lang={lang}
-                isAdmin={admin.isAdmin}
-                showForm={showAdminLogin}
-                onShowForm={setShowAdminLogin}
-                onLogin={loginAndResumePendingAction}
-                onLogout={admin.logout}
-              />
-            )}
-          </div>
         </aside>
 
         <ul
@@ -563,7 +506,16 @@ export default function NewsApp({
             selected ? "hidden md:block" : "block"
           }`}
         >
-          {filtered.length === 0 && (
+          {filtered.length === 0 && sources.length === 0 && (
+            <li className="p-6 text-center">
+              <p className="mb-1 text-sm font-medium">{t(lang, "emptyHomeTitle")}</p>
+              <p className="mb-3 text-sm text-neutral-500">{t(lang, "emptyHomeSubtitle")}</p>
+              <Link href="/onboarding" className="text-sm text-neutral-700 underline hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white">
+                {t(lang, "browseRecommended")}
+              </Link>
+            </li>
+          )}
+          {filtered.length === 0 && sources.length > 0 && (
             <li className="p-6 text-center text-sm text-neutral-500">
               {articles.length === 0 ? t(lang, "noArticles") : t(lang, "noArticlesFiltered")}
             </li>
@@ -642,33 +594,6 @@ export default function NewsApp({
           {toast}
         </div>
       )}
-
-      <ConfirmDialog
-        open={dialog?.kind === "login-required"}
-        title={t(lang, "adminLoginButton")}
-        message={loginRequiredMessage()}
-        confirmLabel={t(lang, "adminLoginButton")}
-        cancelLabel={t(lang, "cancel")}
-        onConfirm={() => {
-          setDialog(null);
-          setSidebarOpen(true);
-          setShowAdminLogin(true);
-        }}
-        onCancel={() => {
-          setDialog(null);
-          setPendingAction(null);
-        }}
-      />
-
-      <ConfirmDialog
-        open={dialog?.kind === "not-configured"}
-        title={t(lang, "adminNotConfiguredTitle")}
-        message={t(lang, "adminNotConfiguredMessage")}
-        confirmLabel={t(lang, "ok")}
-        hideCancel
-        onConfirm={() => setDialog(null)}
-        onCancel={() => setDialog(null)}
-      />
 
       {dialog?.kind === "confirm-remove-source" && (
         <ConfirmDialog
@@ -769,6 +694,62 @@ function LangToggle({ lang, onChange }: { lang: Lang; onChange: (l: Lang) => voi
   );
 }
 
+function UserMenu({
+  lang,
+  user,
+  signOutAction,
+}: {
+  lang: Lang;
+  user: { name: string | null; email: string | null; image: string | null };
+  signOutAction: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const label = user.name || user.email || "";
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label={label}
+        className="flex items-center gap-1.5 rounded-full border border-black/10 py-1 pl-1 pr-2 text-sm hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10"
+      >
+        {user.image ? (
+          <Image src={user.image} alt="" width={24} height={24} unoptimized className="h-6 w-6 rounded-full" />
+        ) : (
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-200 text-xs dark:bg-neutral-700">
+            {label.slice(0, 1).toUpperCase()}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 top-full z-30 mt-1 w-48 rounded-md border border-black/10 bg-white p-1 text-sm shadow-lg dark:border-white/15 dark:bg-neutral-900"
+          onMouseLeave={() => setOpen(false)}
+        >
+          <div className="truncate px-2 py-1.5 text-xs text-neutral-500">{user.email}</div>
+          <Link
+            href="/settings"
+            className="block rounded px-2 py-1.5 hover:bg-black/5 dark:hover:bg-white/10"
+            onClick={() => setOpen(false)}
+          >
+            {t(lang, "settingsLink")}
+          </Link>
+          <form action={signOutAction}>
+            <button
+              type="submit"
+              className="block w-full rounded px-2 py-1.5 text-left hover:bg-black/5 dark:hover:bg-white/10"
+            >
+              {t(lang, "signOutButton")}
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SidebarButton({
   label,
   active,
@@ -796,94 +777,6 @@ function SidebarButton({
       <span className="truncate">{label}</span>
       {badge !== undefined && <span className="ml-1.5 text-xs opacity-70">{badge}</span>}
     </button>
-  );
-}
-
-function AdminLoginArea({
-  lang,
-  isAdmin,
-  showForm,
-  onShowForm,
-  onLogin,
-  onLogout,
-}: {
-  lang: Lang;
-  isAdmin: boolean;
-  showForm: boolean;
-  onShowForm: (v: boolean) => void;
-  onLogin: (password: string) => Promise<string | null>;
-  onLogout: () => Promise<void>;
-}) {
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  if (isAdmin) {
-    return (
-      <button
-        type="button"
-        onClick={() => onLogout()}
-        className="w-full rounded-md px-2 py-1.5 text-left text-xs text-neutral-500 hover:bg-black/5 dark:hover:bg-white/10"
-      >
-        {t(lang, "adminLogoutButton")}
-      </button>
-    );
-  }
-
-  if (!showForm) {
-    return (
-      <button
-        type="button"
-        onClick={() => onShowForm(true)}
-        className="w-full rounded-md px-2 py-1.5 text-left text-xs text-neutral-500 hover:bg-black/5 dark:hover:bg-white/10"
-      >
-        {t(lang, "adminLoginButton")}
-      </button>
-    );
-  }
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    const err = await onLogin(password);
-    setSubmitting(false);
-    if (err) {
-      setError(t(lang, "adminLoginError"));
-    } else {
-      setPassword("");
-    }
-  }
-
-  return (
-    <form onSubmit={submit} className="space-y-2">
-      <input
-        type="password"
-        autoComplete="current-password"
-        autoFocus
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        placeholder={t(lang, "adminPasswordPlaceholder")}
-        className="w-full rounded-md border border-black/10 bg-transparent px-2 py-1 text-sm outline-none focus-visible:border-neutral-400 dark:border-white/15"
-      />
-      {error && <p className="text-xs text-red-500">{error}</p>}
-      <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={submitting || !password}
-          className="flex-1 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
-        >
-          {t(lang, "adminLoginSubmit")}
-        </button>
-        <button
-          type="button"
-          onClick={() => onShowForm(false)}
-          className="flex-1 rounded-md border border-black/10 px-2 py-1 text-xs dark:border-white/15"
-        >
-          {t(lang, "cancel")}
-        </button>
-      </div>
-    </form>
   );
 }
 
@@ -937,94 +830,6 @@ function AddCategoryForm({
           className="flex-1 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
         >
           {submitting ? t(lang, "adding") : t(lang, "add")}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="flex-1 rounded-md border border-black/10 px-2 py-1 text-xs dark:border-white/15"
-        >
-          {t(lang, "cancel")}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function AddSourceForm({
-  lang,
-  categories,
-  onDone,
-  onCancel,
-}: {
-  lang: Lang;
-  categories: Category[];
-  onDone: () => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [feedUrl, setFeedUrl] = useState("");
-  const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/sources", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, feedUrl, categoryId }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || t(lang, "genericAddSourceError"));
-      onDone();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t(lang, "genericAddSourceError"));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  if (categories.length === 0) {
-    return <p className="mb-3 text-xs text-neutral-500">{t(lang, "needCategoryFirst")}</p>;
-  }
-
-  return (
-    <form onSubmit={submit} className="mb-3 space-y-2 rounded-md border border-black/10 p-2 dark:border-white/15">
-      <input
-        autoFocus
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder={t(lang, "websiteNamePlaceholder")}
-        className="w-full rounded-md border border-black/10 bg-transparent px-2 py-1 text-sm outline-none focus-visible:border-neutral-400 dark:border-white/15"
-      />
-      <input
-        value={feedUrl}
-        onChange={(e) => setFeedUrl(e.target.value)}
-        placeholder={t(lang, "feedUrlPlaceholder")}
-        className="w-full rounded-md border border-black/10 bg-transparent px-2 py-1 text-sm outline-none focus-visible:border-neutral-400 dark:border-white/15"
-      />
-      <select
-        value={categoryId}
-        onChange={(e) => setCategoryId(e.target.value)}
-        className="w-full rounded-md border border-black/10 bg-transparent px-2 py-1 text-sm outline-none focus-visible:border-neutral-400 dark:border-white/15"
-      >
-        {categories.map((c) => (
-          <option key={c.id} value={c.id} className="text-black">
-            {c.name}
-          </option>
-        ))}
-      </select>
-      {error && <p className="text-xs text-red-500">{error}</p>}
-      <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={submitting || !name.trim() || !feedUrl.trim()}
-          className="flex-1 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
-        >
-          {submitting ? t(lang, "addingSource") : t(lang, "add")}
         </button>
         <button
           type="button"

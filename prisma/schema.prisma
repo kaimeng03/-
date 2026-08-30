@@ -1,0 +1,316 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Auth.js (next-auth v5) + @auth/prisma-adapter required models.
+// Field/model shapes follow the adapter's own canonical schema
+// (packages/adapter-prisma/prisma/schema.prisma in nextauthjs/next-auth),
+// extended with newskill-specific columns on User.
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+
+  /// Google's stable "sub" claim — the real identity key for this user.
+  /// Populated from the OAuth account link, never trusted from client input.
+  googleSub String? @unique
+
+  professionKey       String?
+  customProfession    String?
+  onboardingCompleted Boolean @default(false)
+
+  role String @default("user")
+
+  /// Timestamps recording a successful legacy-data import, so the
+  /// import prompts are not shown again once completed (§10).
+  legacySourcesImportedAt   DateTime?
+  legacyReadStateImportedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  categories    UserCategory[]
+  subscriptions Subscription[]
+  articleStates ArticleState[]
+  sourcesCreated Source[]      @relation("SourceCreatedBy")
+  sourceSubmissions SourceSubmission[]
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// newskill product data model.
+// A Source is global and may be shared by many users' Subscriptions.
+// Everything user-owned (categories, subscriptions, read/saved state) is
+// strictly scoped by userId — see src/lib/db/*.ts for the enforcement layer.
+// ---------------------------------------------------------------------------
+
+enum SourceType {
+  rss
+  html
+}
+
+/// Richer, forward-looking classification used by the connector architecture
+/// (src/lib/connectors). Kept alongside the original `type` field rather than
+/// replacing it — `type` remains what src/lib/feeds.ts and the legacy
+/// addUserSource() path read/write, so existing rows and code are untouched.
+/// New code (discovery, catalog seeding, provider connectors) reads/writes
+/// `connectorType`; src/lib/feeds.ts gains one additive branch for "api".
+enum ConnectorType {
+  rss
+  atom
+  api
+  sitemap
+  html_adapter
+}
+
+enum CatalogStatus {
+  curated
+  user_added
+  pending
+  rejected
+  inactive
+}
+
+enum VerificationStatus {
+  verified
+  unverified
+  failed
+}
+
+enum AccessType {
+  free
+  open_access
+  partial
+  subscription
+  unknown
+}
+
+enum ContentType {
+  news
+  magazine
+  journal
+  government
+  guideline
+  preprint
+  blog
+  other
+}
+
+model Source {
+  id String @id @default(cuid())
+
+  name     String
+  homepage String
+
+  /// Canonicalized form of homepage/feed URL, used to dedupe Source rows
+  /// so two users adding the "same" site never create two Source records.
+  normalizedUrl String @unique
+
+  feedUrl String?
+  type    SourceType @default(rss)
+  pageUrl String?
+
+  /// Name of the HTML adapter to use when type = "html" (e.g. "twarchitect").
+  adapter String?
+
+  /// --- Catalog / connector metadata (additive; all optional or defaulted so
+  /// every pre-existing row remains valid without a data migration). ---
+  connectorType ConnectorType @default(rss)
+  /// Free-text, extensible: "generic", "twarchitect", "europepmc", "pubmed",
+  /// "crossref", etc. Not an enum, so a new provider never needs a migration.
+  provider String @default("generic")
+  /// Public, non-secret settings only (query strings, ISSNs, journal ids) —
+  /// never an API key or anything else that must stay server-only.
+  connectorConfig Json?
+
+  language     String?
+  country      String?
+  accessType   AccessType  @default(unknown)
+  contentType  ContentType @default(other)
+  peerReviewed Boolean?
+  preprint     Boolean?
+
+  /// Only "curated" + active sources are eligible for /api/recommendations —
+  /// a user's own self-added source is never surfaced to other users.
+  catalogStatus       CatalogStatus       @default(user_added)
+  verificationStatus  VerificationStatus  @default(unverified)
+  verificationNote    String?
+  verifiedAt          DateTime?
+  lastHealthyAt       DateTime?
+  lastErrorCode       String?
+
+  active Boolean @default(true)
+
+  createdByUserId String?
+  createdByUser   User?   @relation("SourceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions Subscription[]
+  professions   ProfessionSource[]
+
+  @@index([createdByUserId])
+  @@index([catalogStatus])
+}
+
+/// A Source may belong to more than one profession (e.g. Crossref-backed
+/// journals can be relevant to health AND education). Every profession uses
+/// this exact same join table — there is deliberately no profession-specific
+/// model (see AGENTS/product-spec: professions are equal, not tiered).
+model ProfessionSource {
+  id String @id @default(cuid())
+
+  sourceId String
+  source   Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  /// Matches src/lib/professions.ts PROFESSIONS[].key — not a DB enum, so
+  /// adding a profession never needs a migration.
+  professionKey String
+
+  createdAt DateTime @default(now())
+
+  @@unique([sourceId, professionKey])
+  @@index([professionKey])
+}
+
+enum SubmissionStatus {
+  pending
+  approved
+  rejected
+  duplicate
+}
+
+/// "I want this source supported" requests for sites the discovery flow
+/// couldn't confirm (blocked, no feed, unsupported input, etc). A user can
+/// only ever see their own submissions.
+model SourceSubmission {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Exactly what the user typed — a URL, DOI, ISSN, journal name, or keyword.
+  input     String
+  inputType String
+
+  /// Best-effort cleaned/candidate URL the discovery flow found, if any.
+  detectedUrl String?
+
+  status        SubmissionStatus @default(pending)
+  failureCode   String?
+  failureReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model UserCategory {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name     String
+  position Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model Subscription {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sourceId String
+  source   Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  categoryId String?
+  category   UserCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, sourceId])
+  @@index([userId])
+  @@index([sourceId])
+  @@index([categoryId])
+}
+
+model ArticleState {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Stable article identifier as produced by the existing article-id logic
+  /// (not a foreign key — articles themselves are not persisted in the DB).
+  articleId String
+
+  readAt  DateTime?
+  savedAt DateTime?
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, articleId])
+  @@index([userId])
+  @@index([articleId])
+}

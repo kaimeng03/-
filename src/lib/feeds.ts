@@ -6,6 +6,10 @@ import { safeFetch, readBodyWithLimit } from "./safeFetch";
 import { sanitizeArticleHtml, stripToPlainText } from "./sanitizeArticleHtml";
 import { rewriteImageUrls } from "./extract";
 import { getHtmlAdapter } from "./adapters";
+import { fetchEuropePmcArticles } from "./connectors/europepmc";
+import { fetchPubMedArticles } from "./connectors/pubmed";
+import { fetchCrossrefArticles } from "./connectors/crossref";
+import type { NormalizedArticle } from "./connectors/types";
 import type { Article } from "./types";
 
 type FeedItem = Parser.Item & {
@@ -86,6 +90,36 @@ interface RawArticle {
 
 export const FEEDS_CACHE_TAG = "feeds";
 
+/** Dispatches an API-provider Source (Europe PMC/PubMed/Crossref) to its
+ *  connector by `source.provider`, after validating `connectorConfig` at
+ *  runtime — malformed config or an unrecognized provider throws a real
+ *  error (caught by fetchAllArticles' allSettled, surfaced in
+ *  failedSourceNames) rather than silently returning no articles. */
+async function fetchApiProviderArticles(source: Source): Promise<NormalizedArticle[]> {
+  const config = (source.connectorConfig ?? {}) as Record<string, unknown>;
+
+  switch (source.provider) {
+    case "europepmc": {
+      const query = typeof config.query === "string" ? config.query.trim() : "";
+      if (!query) throw new Error(`Europe PMC source ${source.id} has an invalid connectorConfig (missing query)`);
+      return fetchEuropePmcArticles(query);
+    }
+    case "pubmed": {
+      const term = typeof config.term === "string" ? config.term.trim() : "";
+      if (!term) throw new Error(`PubMed source ${source.id} has an invalid connectorConfig (missing term)`);
+      return fetchPubMedArticles(term);
+    }
+    case "crossref": {
+      const query = typeof config.query === "string" ? config.query.trim() : "";
+      const issn = typeof config.issn === "string" ? config.issn.trim() : "";
+      if (!query && !issn) throw new Error(`Crossref source ${source.id} has an invalid connectorConfig (missing query/issn)`);
+      return fetchCrossrefArticles({ query: query || undefined, issn: issn || undefined });
+    }
+    default:
+      throw new Error(`Unrecognized API provider "${source.provider}" for source ${source.id}`);
+  }
+}
+
 async function fetchSourceArticles(source: Source): Promise<RawArticle[]> {
   if (source.type === "html") {
     const adapter = getHtmlAdapter(source.adapter);
@@ -104,6 +138,26 @@ async function fetchSourceArticles(source: Source): Promise<RawArticle[]> {
       titleEn: item.title,
       summaryEn: item.summary,
       feedHtmlEn: item.htmlEn,
+      // A listing adapter declares whether its item link is a genuine article
+      // page. Legacy/single-page adapters default to feed-only; generic public
+      // websites opt into the existing safe full-content extractor.
+      contentMode: item.contentMode ?? "feed-only",
+    }));
+  }
+
+  if (source.type === "api") {
+    const items = await fetchApiProviderArticles(source);
+    return items.map((item) => ({
+      id: item.id,
+      link: item.canonicalUrl,
+      sourceId: source.id,
+      sourceName: source.name,
+      categoryId: source.categoryId,
+      pubDate: item.publishedAt,
+      thumbnail: item.thumbnail,
+      titleEn: item.title,
+      summaryEn: item.summary ?? "",
+      feedHtmlEn: null,
       contentMode: "feed-only",
     }));
   }
@@ -152,6 +206,30 @@ async function fetchSourceArticles(source: Source): Promise<RawArticle[]> {
 export interface FetchAllArticlesResult {
   articles: Article[];
   failedSourceNames: string[];
+}
+
+export interface SourcePreviewArticle {
+  id: string;
+  title: string;
+  summary: string;
+  canonicalUrl: string;
+  publishedAt: string | null;
+  thumbnail: string | null;
+}
+
+/** Fetches a small, read-only sample for the curated catalog UI. It reuses the
+ * exact source connector used by the homepage but intentionally skips article
+ * translation, keeping previews fast and avoiding unnecessary translator quota. */
+export async function fetchSourcePreview(source: Source, limit = 5): Promise<SourcePreviewArticle[]> {
+  const items = await fetchSourceArticles(source);
+  return items.slice(0, Math.min(Math.max(limit, 1), 5)).map((item) => ({
+    id: item.id,
+    title: item.titleEn,
+    summary: item.summaryEn,
+    canonicalUrl: item.link,
+    publishedAt: item.pubDate,
+    thumbnail: item.thumbnail,
+  }));
 }
 
 export async function fetchAllArticles(sources: Source[]): Promise<FetchAllArticlesResult> {

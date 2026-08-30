@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "建築新聞",
-  description: "每日建築新聞閱讀器",
+  title: "newskill",
+  description: "newskill — 個人化的建築新聞閱讀器",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

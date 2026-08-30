@@ -1,0 +1,41 @@
+{
+  "profession": "law",
+  "sources": [
+    {
+      "name": "SCOTUSblog",
+      "homepage": "https://www.scotusblog.com",
+      "feedUrl": "https://www.scotusblog.com/feed/",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 RSS 端點發送即時請求，回應 HTTP 200 且內容為有效 rss/xml。"
+    },
+    {
+      "name": "Above the Law",
+      "homepage": "https://abovethelaw.com",
+      "feedUrl": "https://abovethelaw.com/feed/",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 RSS 端點發送即時請求，回應 HTTP 200 且內容為有效 rss/xml。"
+    },
+    {
+      "name": "U.S. FTC — Press Releases",
+      "homepage": "https://www.ftc.gov",
+      "feedUrl": "https://www.ftc.gov/feeds/press-release.xml",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "government",
+      "accessType": "free",
+      "verificationNote": "美國聯邦貿易委員會官方 RSS，以 curl 即時請求驗證回應 HTTP 200 且為有效 rss/xml。"
+    }
+  ]
+}

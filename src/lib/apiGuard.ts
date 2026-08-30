@@ -1,10 +1,10 @@
 import type { NextRequest } from "next/server";
-import { isAdminRequest, isAdminConfigured } from "./adminAuth";
 import { rateLimit, clientIp } from "./rateLimit";
 import { checkTrustedOrigin } from "./csrf";
+import type { Session } from "next-auth";
 
 /** Returns a 403 Response if the request's Origin isn't one of our own trusted
- *  origins, else null. Call this before requireAdmin on any mutation route. */
+ *  origins, else null. Call this before requireSession on any mutation route. */
 export function requireTrustedOrigin(req: NextRequest): Response | null {
   const result = checkTrustedOrigin(req);
   if (!result.ok) {
@@ -13,18 +13,20 @@ export function requireTrustedOrigin(req: NextRequest): Response | null {
   return null;
 }
 
-/** Returns a 401/501 Response if the request isn't an authenticated admin, else null. */
-export function requireAdmin(req: NextRequest): Response | null {
-  if (!isAdminConfigured()) {
-    return Response.json(
-      { error: "此功能尚未設定管理密碼，暫時無法使用" },
-      { status: 501 },
-    );
+/**
+ * Resolves the current user's session strictly from the server-side cookie —
+ * never from any client-supplied body/query/path value. Returns either the
+ * session or a 401 Response, so callers can `if (!("user" in result)) return result;`.
+ */
+export async function requireSession(): Promise<Session | Response> {
+  // Imported lazily so routes/tests that never call requireSession() don't pay
+  // the cost of loading the Auth.js/Prisma machinery.
+  const { auth } = await import("@/auth");
+  const session = await auth();
+  if (!session?.user) {
+    return Response.json({ error: "需要登入" }, { status: 401 });
   }
-  if (!isAdminRequest(req)) {
-    return Response.json({ error: "需要管理者登入" }, { status: 401 });
-  }
-  return null;
+  return session;
 }
 
 /** Returns a 429 Response if the caller has exceeded the given limit, else null. */

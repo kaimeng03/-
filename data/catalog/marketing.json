@@ -1,0 +1,53 @@
+{
+  "profession": "marketing",
+  "sources": [
+    {
+      "name": "Search Engine Land",
+      "homepage": "https://searchengineland.com",
+      "feedUrl": "https://searchengineland.com/feed",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 RSS 端點發送即時請求，回應 HTTP 200 且內容為有效 rss/xml。"
+    },
+    {
+      "name": "Marketing Dive",
+      "homepage": "https://www.marketingdive.com",
+      "feedUrl": "https://www.marketingdive.com/feeds/news/",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 RSS 端點發送即時請求，回應 HTTP 200 且內容為有效 rss/xml。"
+    },
+    {
+      "name": "公視新聞網",
+      "homepage": "https://news.pts.org.tw",
+      "feedUrl": "https://news.pts.org.tw/xml/newsfeed.xml",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "zh-Hant",
+      "country": "TW",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "2026-08-30 驗證公視新聞網官方 XML feed：HTTP 200、application/xml，並以 newskill 解析器成功預覽 5 篇繁體中文文章。"
+    },
+    {
+      "name": "中央社國際新聞",
+      "homepage": "https://www.cna.com.tw/list/aopl.aspx",
+      "feedUrl": "https://feeds.feedburner.com/rsscna/intworld",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "zh-Hant",
+      "country": "TW",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "2026-08-30 以 newskill 解析器成功預覽中央社國際 RSS，抽查項目全部連回 cna.com.tw 官方文章網域。"
+    }
+  ]
+}

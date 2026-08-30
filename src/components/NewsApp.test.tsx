@@ -54,11 +54,9 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("NewsApp — add/delete buttons stay visible regardless of login state", () => {
-  it("shows Add Website / Add Category buttons and delete (✕) buttons when NOT logged in", async () => {
-    mockFetchSequence({
-      "/api/admin/session": () => ({ isAdmin: false, configured: true }),
-    });
+describe("NewsApp — add/delete are always usable once logged in (no separate admin gate)", () => {
+  it("shows Add Website / Add Category buttons and delete (✕) buttons", async () => {
+    mockFetchSequence({});
     render(<NewsApp {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByText("＋ 新增網站")).toBeInTheDocument());
@@ -67,42 +65,47 @@ describe("NewsApp — add/delete buttons stay visible regardless of login state"
     expect(screen.getByLabelText("刪除分類 建築新聞")).toBeInTheDocument();
   });
 
-  it("clicking Add Website while logged out prompts login instead of opening the form", async () => {
-    mockFetchSequence({
-      "/api/admin/session": () => ({ isAdmin: false, configured: true }),
-    });
+  it("clicking Add Website opens the unified add-source flow directly — no login prompt of any kind", async () => {
+    mockFetchSequence({});
     render(<NewsApp {...baseProps()} />);
     await waitFor(() => expect(screen.getByText("＋ 新增網站")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("＋ 新增網站"));
 
-    expect(await screen.findByText("請先登入管理者才能新增網站")).toBeInTheDocument();
-    // The add-source form itself must NOT have opened.
-    expect(screen.queryByPlaceholderText("網站名稱")).not.toBeInTheDocument();
+    // The unified flow's three equal entry points (precise/curated, search, manual).
+    expect(await screen.findByText("精選來源")).toBeInTheDocument();
+    expect(screen.getByText("搜尋全部來源")).toBeInTheDocument();
+    expect(screen.getByText("自行新增")).toBeInTheDocument();
   });
 
-  it("clicking ✕ on a source while logged out prompts login instead of deleting", async () => {
-    mockFetchSequence({
-      "/api/admin/session": () => ({ isAdmin: false, configured: true }),
-    });
+  it("the manual-add tab shows the URL/RSS/DOI/ISSN input", async () => {
+    mockFetchSequence({});
+    render(<NewsApp {...baseProps()} />);
+    await waitFor(() => expect(screen.getByText("＋ 新增網站")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("＋ 新增網站"));
+    fireEvent.click(await screen.findByText("自行新增"));
+
+    expect(await screen.findByPlaceholderText("貼上想追蹤的網站網址")).toBeInTheDocument();
+  });
+
+  it("clicking ✕ on a source opens the remove-confirmation dialog directly", async () => {
+    mockFetchSequence({});
     render(<NewsApp {...baseProps()} />);
     await waitFor(() => expect(screen.getByLabelText("取消追蹤 ArchDaily")).toBeInTheDocument());
 
     fireEvent.click(screen.getByLabelText("取消追蹤 ArchDaily"));
 
-    expect(await screen.findByText("請先登入管理者才能修改追蹤項目")).toBeInTheDocument();
+    expect(await screen.findByText("確定要取消追蹤「ArchDaily」嗎？")).toBeInTheDocument();
   });
 
-  it("shows a clear message (not silence) when ADMIN_PASSWORD isn't configured", async () => {
-    mockFetchSequence({
-      "/api/admin/session": () => ({ isAdmin: false, configured: false }),
-    });
+  it("clicking Add Category opens the form directly", async () => {
+    mockFetchSequence({});
     render(<NewsApp {...baseProps()} />);
-    await waitFor(() => expect(screen.getByText("＋ 新增網站")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("＋ 新增分類")).toBeInTheDocument());
 
-    fireEvent.click(screen.getByText("＋ 新增網站"));
+    fireEvent.click(screen.getByText("＋ 新增分類"));
 
-    expect(await screen.findByText("尚未設定管理密碼")).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText("分類名稱，例如：室內設計")).toBeInTheDocument();
   });
 });
 
@@ -110,7 +113,6 @@ describe("NewsApp — non-empty category deletion requires real two-step confirm
   it("does not call DELETE after the first confirmation; only after the second", async () => {
     const deleteCalls: string[] = [];
     mockFetchSequence({
-      "/api/admin/session": () => ({ isAdmin: true, configured: true }),
       "/api/categories/architecture-news": (init) => {
         deleteCalls.push((init?.method || "GET") as string);
         return { ok: true };
@@ -134,7 +136,7 @@ describe("NewsApp — non-empty category deletion requires real two-step confirm
   });
 
   it("cancelling at step 2 never calls DELETE", async () => {
-    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ isAdmin: true, configured: true }) }) as Response);
+    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({}) }) as Response);
     vi.stubGlobal("fetch", fetchSpy);
     render(<NewsApp {...baseProps()} />);
     await waitFor(() => expect(screen.getByLabelText("刪除分類 建築新聞")).toBeInTheDocument());
@@ -155,7 +157,6 @@ describe("NewsApp — non-empty category deletion requires real two-step confirm
     let capturedUrl = "";
     let capturedMethod = "";
     mockFetchSequence({
-      "/api/admin/session": () => ({ isAdmin: true, configured: true }),
       "/api/categories/architecture-news": (init) => {
         capturedMethod = (init?.method || "GET") as string;
         return { ok: true };
@@ -194,9 +195,6 @@ describe("NewsApp — non-empty category deletion requires real two-step confirm
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.toString().includes("/api/admin/session")) {
-          return { ok: true, json: async () => ({ isAdmin: true, configured: true }) } as Response;
-        }
         if (url.toString().includes("/api/categories/architecture-news")) {
           capturedMethod = (init?.method || "GET") as string;
           return { ok: true, json: async () => ({ ok: true }) } as Response;

@@ -24,8 +24,8 @@ async function translateFeedHtml(html: string): Promise<string> {
 }
 
 /** Sanitizes feedHtmlEn and translates it, producing a feed-content (or, if there's
- *  no feed HTML at all, summary-only) response. Shared by the feedOnly path (HTML
- *  adapter sources, which never attempt live extraction) and the gated-extraction
+ *  no feed HTML at all, summary-only) response. Shared by the feedOnly path (for
+ *  adapters with no distinct article page) and the gated-extraction
  *  fallback path (RSS sources whose live page turned out to be a login wall etc). */
 async function buildFeedContentResponse(params: {
   feedHtmlEn: string | null;

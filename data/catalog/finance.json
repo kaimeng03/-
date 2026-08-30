@@ -1,0 +1,41 @@
+{
+  "profession": "finance",
+  "sources": [
+    {
+      "name": "Federal Reserve — Press Releases",
+      "homepage": "https://www.federalreserve.gov",
+      "feedUrl": "https://www.federalreserve.gov/feeds/press_all.xml",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "government",
+      "accessType": "free",
+      "verificationNote": "美國聯邦準備理事會官方 RSS，以 curl 即時請求驗證回應 HTTP 200 且為有效 rss/xml。"
+    },
+    {
+      "name": "U.S. SEC — Press Releases",
+      "homepage": "https://www.sec.gov",
+      "feedUrl": "https://www.sec.gov/news/pressreleases.rss",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "government",
+      "accessType": "free",
+      "verificationNote": "美國證券交易委員會官方 RSS，以 curl 即時請求驗證回應 HTTP 200 且為有效 rss/xml。"
+    },
+    {
+      "name": "中央社財經新聞",
+      "homepage": "https://www.cna.com.tw/list/aie.aspx",
+      "feedUrl": "https://feeds.feedburner.com/rsscna/finance",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "zh-Hant",
+      "country": "TW",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "2026-08-30 以 newskill 解析器成功預覽中央社財經 RSS，抽查項目全部連回 cna.com.tw 官方文章網域。"
+    }
+  ]
+}

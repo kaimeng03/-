@@ -1,0 +1,77 @@
+{
+  "profession": "architecture",
+  "sources": [
+    {
+      "name": "ArchDaily",
+      "homepage": "https://www.archdaily.com",
+      "feedUrl": "https://www.archdaily.com/rss/",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": null,
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "既有已驗證來源，沿用先前建置階段的驗證結果；本次確認 RSS 端點持續有效。"
+    },
+    {
+      "name": "Dezeen",
+      "homepage": "https://www.dezeen.com",
+      "feedUrl": "https://www.dezeen.com/feed/",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": null,
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "既有已驗證來源，沿用先前建置階段的驗證結果。"
+    },
+    {
+      "name": "designboom",
+      "homepage": "https://www.designboom.com/architecture",
+      "feedUrl": "https://www.designboom.com/architecture/feed/",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": null,
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "既有已驗證來源，沿用先前建置階段的驗證結果。"
+    },
+    {
+      "name": "Architizer",
+      "homepage": "https://architizer.com",
+      "feedUrl": "https://architizer.com/blog/feed/",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": null,
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "既有已驗證來源，沿用先前建置階段的驗證結果。"
+    },
+    {
+      "name": "The Architect's Newspaper",
+      "homepage": "https://www.archpaper.com",
+      "feedUrl": "https://www.archpaper.com/feed",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": null,
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "既有已驗證來源，沿用先前建置階段的驗證結果。完整內文擷取有防爬蟲限制，RSS 摘要仍可正常使用。"
+    },
+    {
+      "name": "建築師雜誌",
+      "homepage": "https://www.twarchitect.org.tw/page_news/",
+      "feedUrl": "https://www.twarchitect.org.tw/page_news/",
+      "connectorType": "html_adapter",
+      "provider": "twarchitect",
+      "language": "zh-Hant",
+      "country": "TW",
+      "contentType": "magazine",
+      "accessType": "free",
+      "verificationNote": "無官方 RSS，使用專屬 HTML adapter（src/lib/adapters/twarchitect.ts）解析既有頁面結構，既有已驗證來源。"
+    }
+  ]
+}

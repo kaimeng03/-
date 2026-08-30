@@ -1,0 +1,17 @@
+{
+  "profession": "health",
+  "sources": [
+    {
+      "name": "WHO — News",
+      "homepage": "https://www.who.int",
+      "feedUrl": "https://www.who.int/rss-feeds/news-english.xml",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": null,
+      "contentType": "government",
+      "accessType": "free",
+      "verificationNote": "世界衛生組織官方 RSS，以 curl 即時請求驗證回應 HTTP 200 且為有效 rss/xml。"
+    }
+  ]
+}

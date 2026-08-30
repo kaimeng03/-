@@ -15,9 +15,9 @@ export interface Article {
    *  no-scraping fallback when live extraction hits a login wall or challenge.
    *  null when the feed only provided a short summary with nothing beyond that. */
   feedHtmlEn: string | null;
-  /** "extract" (default, RSS sources): try live extraction, fall back to feedHtmlEn.
-   *  "feed-only" (HTML-adapter sources): the scraped content IS the article; there's
-   *  no separate full-article page worth (re-)fetching, so skip extraction entirely. */
+  /** "extract": the link is a real article page, so try safe live extraction and
+   *  fall back to feedHtmlEn. "feed-only": the adapter already returned the item
+   *  or has no separate article page, so live extraction must be skipped. */
   contentMode: "extract" | "feed-only";
 }
 

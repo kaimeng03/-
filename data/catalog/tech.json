@@ -1,0 +1,65 @@
+{
+  "profession": "tech",
+  "sources": [
+    {
+      "name": "Ars Technica",
+      "homepage": "https://arstechnica.com",
+      "feedUrl": "https://feeds.arstechnica.com/arstechnica/index",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 RSS 端點發送即時請求，回應 HTTP 200 且內容為有效 rss/xml。"
+    },
+    {
+      "name": "TechCrunch",
+      "homepage": "https://techcrunch.com",
+      "feedUrl": "https://techcrunch.com/feed/",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 RSS 端點發送即時請求，回應 HTTP 200 且內容為有效 rss/xml。"
+    },
+    {
+      "name": "The Verge",
+      "homepage": "https://www.theverge.com",
+      "feedUrl": "https://www.theverge.com/rss/index.xml",
+      "connectorType": "atom",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 Atom 端點發送即時請求，回應 HTTP 200 且內容為有效 atom feed。"
+    },
+    {
+      "name": "iThome 新聞",
+      "homepage": "https://www.ithome.com.tw",
+      "feedUrl": "https://www.ithome.com.tw/rss",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "zh-Hant",
+      "country": "TW",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "2026-08-30 驗證 iThome 官方 RSS：HTTP 200、application/rss+xml、content-language zh-hant，並以 newskill 解析器成功預覽 5 篇繁體中文文章。"
+    },
+    {
+      "name": "中央社科技新聞",
+      "homepage": "https://www.cna.com.tw/list/ait.aspx",
+      "feedUrl": "https://feeds.feedburner.com/rsscna/technology",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "zh-Hant",
+      "country": "TW",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "2026-08-30 以 newskill 解析器成功預覽中央社科技 RSS，抽查項目全部連回 cna.com.tw 官方文章網域。"
+    }
+  ]
+}

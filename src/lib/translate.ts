@@ -12,6 +12,10 @@ const MYMEMORY_ENDPOINT = "https://api.mymemory.translated.net/get";
 const MYMEMORY_MAX_CHUNK_LENGTH = 450;
 const TRANSLATE_CACHE_SECONDS = 60 * 60 * 24 * 14;
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function toAzureLang(targetLang: string): string {
   return targetLang === "zh-TW" ? "zh-Hant" : targetLang;
 }
@@ -127,7 +131,11 @@ export async function translateMany(texts: string[], targetLang = "zh-TW"): Prom
       });
       return result;
     } catch (err) {
-      console.error("Azure translation failed, falling back to MyMemory:", err);
+      // Translation is an enhancement, not a requirement for rendering the
+      // news page. In Next.js development mode console.error opens a red error
+      // overlay even though the fallback below succeeds, so keep this as a
+      // concise warning without an error stack.
+      console.warn(`Azure translation unavailable; using MyMemory: ${errorMessage(err)}`);
     }
   }
 
@@ -147,9 +155,9 @@ export async function translateMany(texts: string[], targetLang = "zh-TW"): Prom
   // tier rate-limits hard under real load, so a batch of 100+ articles can otherwise
   // print hundreds of near-identical errors for what is really a single condition.
   if (failureCount > 0) {
-    console.error(
-      `Translation fell back to original text for ${failureCount}/${texts.length} item(s). First error:`,
-      firstFailure,
+    console.warn(
+      `Translation unavailable for ${failureCount}/${texts.length} item(s); showing original text. ` +
+        `First failure: ${errorMessage(firstFailure)}`,
     );
   }
 

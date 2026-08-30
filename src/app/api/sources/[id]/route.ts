@@ -1,22 +1,23 @@
 import { NextRequest } from "next/server";
 import { revalidatePath } from "next/cache";
-import { removeSource, NotFoundError } from "@/lib/sourceStore";
-import { requireAdmin, requireTrustedOrigin, checkRateLimit } from "@/lib/apiGuard";
+import { removeUserSource } from "@/lib/db/userSources";
+import { NotFoundError } from "@/lib/sourceStore";
+import { requireSession, requireTrustedOrigin, checkRateLimit } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
 export async function DELETE(req: NextRequest, ctx: RouteContext<"/api/sources/[id]">) {
   const originError = requireTrustedOrigin(req);
   if (originError) return originError;
-  const authError = requireAdmin(req);
-  if (authError) return authError;
+  const session = await requireSession();
+  if (session instanceof Response) return session;
   const rateLimitError = checkRateLimit(req, "mutate-sources", 20, 60 * 60 * 1000);
   if (rateLimitError) return rateLimitError;
 
   const { id } = await ctx.params;
 
   try {
-    await removeSource(id);
+    await removeUserSource(session.user.id, id);
     revalidatePath("/");
     return Response.json({ ok: true });
   } catch (err) {

@@ -1,13 +1,30 @@
 import { NextRequest } from "next/server";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { FEEDS_CACHE_TAG } from "@/lib/feeds";
-import { checkRateLimit } from "@/lib/apiGuard";
+import { checkRateLimit, requireSession } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
+/** True only for a request carrying the server-only CRON_SECRET — lets a
+ *  scheduler trigger a refresh without a user session. Never trusted unless
+ *  CRON_SECRET is actually configured (an unset secret must never match). */
+function isTrustedCronRequest(req: NextRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  const provided = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  return provided === secret;
+}
+
 export async function POST(req: NextRequest) {
-  // Public (no admin login needed to refresh), but still rate-limited — a manual
-  // refresh forces real network fetches against every configured RSS feed.
+  // A manual refresh forces real network fetches against every configured RSS
+  // feed, so it must not be anonymously triggerable: either a logged-in
+  // user's session, or — for scheduled/automated refreshes — the server-only
+  // CRON_SECRET. Still rate-limited either way.
+  if (!isTrustedCronRequest(req)) {
+    const session = await requireSession();
+    if (session instanceof Response) return session;
+  }
+
   const rateLimitError = checkRateLimit(req, "refresh", 6, 60 * 1000);
   if (rateLimitError) return rateLimitError;
 

@@ -1,27 +1,32 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NextRequest } from "next/server";
+import type { Session } from "next-auth";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@/auth", () => ({ auth: vi.fn() }));
 
-import { removeSource, NotFoundError } from "@/lib/sourceStore";
+import { NotFoundError } from "@/lib/sourceStore";
+import { removeUserSource } from "@/lib/db/userSources";
 
-vi.mock("@/lib/sourceStore", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/sourceStore")>("@/lib/sourceStore");
-  return { ...actual, removeSource: vi.fn() };
-});
+vi.mock("@/lib/db/userSources", () => ({ removeUserSource: vi.fn() }));
 
 import { DELETE } from "./route";
-import { createSessionCookieValue, ADMIN_SESSION_COOKIE } from "@/lib/adminAuth";
+import { auth } from "@/auth";
 
-function makeRequest(opts: { origin?: string | null; loggedIn?: boolean } = {}): NextRequest {
+const mockedAuth = vi.mocked(auth);
+
+function fakeSession(userId = "user-1"): Session {
+  return {
+    user: { id: userId, professionKey: null, customProfession: null, onboardingCompleted: true, role: "user" },
+    expires: new Date(Date.now() + 1000 * 60 * 60).toISOString(),
+  } as Session;
+}
+
+function makeRequest(opts: { origin?: string | null } = {}): NextRequest {
   const origin = "origin" in opts ? opts.origin : "https://example.com";
-  const sessionValue = opts.loggedIn ? createSessionCookieValue() : undefined;
   return {
     headers: { get: (name: string) => (name.toLowerCase() === "origin" ? origin : null) },
-    cookies: {
-      get: (name: string) =>
-        name === ADMIN_SESSION_COOKIE && sessionValue ? { value: sessionValue } : undefined,
-    },
+    cookies: { get: () => undefined },
     nextUrl: new URL("https://example.com/api/sources/some-id"),
   } as unknown as NextRequest;
 }
@@ -29,10 +34,10 @@ function makeRequest(opts: { origin?: string | null; loggedIn?: boolean } = {}):
 const ctx = { params: Promise.resolve({ id: "some-id" }) };
 
 beforeEach(() => {
-  vi.mocked(removeSource).mockReset();
+  vi.mocked(removeUserSource).mockReset();
+  mockedAuth.mockReset();
   vi.stubEnv("NODE_ENV", "production");
   vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://example.com");
-  vi.stubEnv("ADMIN_PASSWORD", "secret");
 });
 
 afterEach(() => {
@@ -43,31 +48,28 @@ describe("DELETE /api/sources/[id]", () => {
   it("rejects an untrusted origin with 403", async () => {
     const res = await DELETE(makeRequest({ origin: "https://evil.example.net" }), ctx);
     expect(res.status).toBe(403);
-    expect(removeSource).not.toHaveBeenCalled();
-  });
-
-  it("returns 501 when admin auth isn't configured", async () => {
-    vi.stubEnv("ADMIN_PASSWORD", "");
-    const res = await DELETE(makeRequest(), ctx);
-    expect(res.status).toBe(501);
+    expect(removeUserSource).not.toHaveBeenCalled();
   });
 
   it("returns 401 when not logged in", async () => {
+    mockedAuth.mockResolvedValue(null as never);
     const res = await DELETE(makeRequest(), ctx);
     expect(res.status).toBe(401);
-    expect(removeSource).not.toHaveBeenCalled();
+    expect(removeUserSource).not.toHaveBeenCalled();
   });
 
-  it("returns 404 for a nonexistent source when logged in", async () => {
-    vi.mocked(removeSource).mockRejectedValueOnce(new NotFoundError("找不到這個網站來源"));
-    const res = await DELETE(makeRequest({ loggedIn: true }), ctx);
+  it("returns 404 when the source isn't subscribed by this user", async () => {
+    mockedAuth.mockResolvedValue(fakeSession() as never);
+    vi.mocked(removeUserSource).mockRejectedValueOnce(new NotFoundError("找不到這個網站來源"));
+    const res = await DELETE(makeRequest(), ctx);
     expect(res.status).toBe(404);
   });
 
-  it("succeeds when logged in and the source exists", async () => {
-    vi.mocked(removeSource).mockResolvedValueOnce(undefined);
-    const res = await DELETE(makeRequest({ loggedIn: true }), ctx);
+  it("succeeds and only removes the session user's own subscription", async () => {
+    mockedAuth.mockResolvedValue(fakeSession("user-42") as never);
+    vi.mocked(removeUserSource).mockResolvedValueOnce(undefined);
+    const res = await DELETE(makeRequest(), ctx);
     expect(res.status).toBe(200);
-    expect(removeSource).toHaveBeenCalledWith("some-id");
+    expect(removeUserSource).toHaveBeenCalledWith("user-42", "some-id");
   });
 });

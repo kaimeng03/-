@@ -1,63 +1,37 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
-
-const STORAGE_KEY = "readState.v1";
-const MAX_TRACKED_IDS = 3000; // bounds localStorage growth over time
+import { useEffect, useSyncExternalStore } from "react";
 
 interface ReadStateData {
-  version: 1;
   read: string[];
   saved: string[];
 }
 
 function emptyState(): ReadStateData {
-  return { version: 1, read: [], saved: [] };
+  return { read: [], saved: [] };
 }
 
 // useSyncExternalStore requires getServerSnapshot to return a stable (Object.is-equal)
 // reference across calls — a fresh object every time makes React think the store
-// changes on every check, which is exactly the "should be cached to avoid an
-// infinite loop" warning this constant fixes.
+// changes on every check.
 const SERVER_SNAPSHOT: ReadStateData = emptyState();
 
-function load(): ReadStateData {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return emptyState();
-    const parsed = JSON.parse(raw);
-    if (parsed?.version !== 1 || !Array.isArray(parsed.read) || !Array.isArray(parsed.saved)) {
-      return emptyState();
-    }
-    return parsed;
-  } catch {
-    return emptyState();
-  }
-}
-
-function save(data: ReadStateData) {
-  try {
-    // Cap growth: keep only the most recently touched ids (appended at the end).
-    const trimmed: ReadStateData = {
-      version: 1,
-      read: data.read.slice(-MAX_TRACKED_IDS),
-      saved: data.saved.slice(-MAX_TRACKED_IDS),
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
-  } catch {
-    // Storage full or blocked — the in-memory `current` below still reflects the
-    // change for the rest of this tab's session.
-  }
-}
-
-// Same in-memory-source-of-truth pattern as useLang, for the same reason: a failed
-// localStorage write must not make the UI look unresponsive.
-let current: ReadStateData | null = null;
+// DB-backed, per-user read/saved state (see /api/article-states). The
+// in-memory `current` below is an optimistic cache: mutations apply here
+// immediately (so the UI never waits on a round trip), then sync to the
+// server in the background. A failed sync rolls the optimistic change back
+// and reports it via the onError callback passed to useReadState().
+let current: ReadStateData = emptyState();
+let hydrated = false;
+let hydrating: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 
 function getState(): ReadStateData {
-  if (current === null) current = load();
   return current;
+}
+
+function getServerSnapshot(): ReadStateData {
+  return SERVER_SNAPSHOT;
 }
 
 function notify() {
@@ -66,27 +40,66 @@ function notify() {
 
 function subscribe(onChange: () => void): () => void {
   listeners.add(onChange);
-  function onStorageEvent(e: StorageEvent) {
-    if (e.key !== null && e.key !== STORAGE_KEY) return;
-    current = load();
-    onChange();
-  }
-  window.addEventListener("storage", onStorageEvent);
-  return () => {
-    listeners.delete(onChange);
-    window.removeEventListener("storage", onStorageEvent);
-  };
+  return () => listeners.delete(onChange);
 }
 
-function getServerSnapshot(): ReadStateData {
-  return SERVER_SNAPSHOT;
+function ensureHydrated(onError?: (message: string) => void) {
+  if (hydrated || hydrating) return;
+  hydrating = fetch("/api/article-states")
+    .then(async (res) => {
+      if (!res.ok) throw new Error("load failed");
+      const data = await res.json();
+      current = {
+        read: Array.isArray(data.read) ? data.read : [],
+        saved: Array.isArray(data.saved) ? data.saved : [],
+      };
+      hydrated = true;
+      notify();
+    })
+    .catch(() => {
+      onError?.("無法載入已讀／收藏狀態，請重新整理頁面再試一次。");
+    })
+    .finally(() => {
+      hydrating = null;
+    });
 }
 
-function mutate(fn: (data: ReadStateData) => ReadStateData) {
-  const next = fn(getState());
+function applyOptimistic(next: ReadStateData) {
   current = next;
-  save(next);
   notify();
+}
+
+async function syncArticleState(
+  articleId: string,
+  update: { read?: boolean; saved?: boolean },
+  rollback: ReadStateData,
+  onError?: (message: string) => void,
+) {
+  try {
+    const res = await fetch(`/api/article-states/${encodeURIComponent(articleId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(update),
+    });
+    if (!res.ok) throw new Error("sync failed");
+  } catch {
+    applyOptimistic(rollback);
+    onError?.("同步已讀／收藏狀態失敗，已還原這個變更。");
+  }
+}
+
+async function syncMarkAllRead(ids: string[], rollback: ReadStateData, onError?: (message: string) => void) {
+  try {
+    const res = await fetch("/api/article-states/mark-all-read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ articleIds: ids }),
+    });
+    if (!res.ok) throw new Error("sync failed");
+  } catch {
+    applyOptimistic(rollback);
+    onError?.("同步已讀狀態失敗，已還原這個變更。");
+  }
 }
 
 export interface ReadStateApi {
@@ -101,30 +114,52 @@ export interface ReadStateApi {
   readIds: Set<string>;
 }
 
-/** Test-only: clears the in-memory hydration cache so each test starts fresh. */
+/** Test-only: resets the in-memory store so each test starts fresh. */
 export function __resetReadStateForTests(): void {
-  current = null;
+  current = emptyState();
+  hydrated = false;
+  hydrating = null;
 }
 
-export function useReadState(): ReadStateApi {
+export function useReadState(onError?: (message: string) => void): ReadStateApi {
   const data = useSyncExternalStore(subscribe, getState, getServerSnapshot);
+
+  useEffect(() => {
+    ensureHydrated(onError);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const readIds = new Set(data.read);
   const savedIds = new Set(data.saved);
 
   return {
     isRead: (id) => readIds.has(id),
     isSaved: (id) => savedIds.has(id),
-    markRead: (id) =>
-      mutate((d) => (d.read.includes(id) ? d : { ...d, read: [...d.read, id] })),
-    markUnread: (id) => mutate((d) => ({ ...d, read: d.read.filter((x) => x !== id) })),
-    toggleSaved: (id) =>
-      mutate((d) =>
-        d.saved.includes(id)
-          ? { ...d, saved: d.saved.filter((x) => x !== id) }
-          : { ...d, saved: [...d.saved, id] },
-      ),
-    markAllRead: (ids) =>
-      mutate((d) => ({ ...d, read: [...new Set([...d.read, ...ids])] })),
+    markRead: (id) => {
+      if (readIds.has(id)) return;
+      const rollback = data;
+      applyOptimistic({ ...data, read: [...data.read, id] });
+      void syncArticleState(id, { read: true }, rollback, onError);
+    },
+    markUnread: (id) => {
+      const rollback = data;
+      applyOptimistic({ ...data, read: data.read.filter((x) => x !== id) });
+      void syncArticleState(id, { read: false }, rollback, onError);
+    },
+    toggleSaved: (id) => {
+      const rollback = data;
+      const nowSaved = !savedIds.has(id);
+      applyOptimistic({
+        ...data,
+        saved: nowSaved ? [...data.saved, id] : data.saved.filter((x) => x !== id),
+      });
+      void syncArticleState(id, { saved: nowSaved }, rollback, onError);
+    },
+    markAllRead: (ids) => {
+      const rollback = data;
+      applyOptimistic({ ...data, read: [...new Set([...data.read, ...ids])] });
+      void syncMarkAllRead(ids, rollback, onError);
+    },
     readCount: readIds.size,
     savedIds,
     readIds,

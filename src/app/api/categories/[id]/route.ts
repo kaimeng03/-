@@ -1,15 +1,16 @@
 import { NextRequest } from "next/server";
 import { revalidatePath } from "next/cache";
-import { removeCategory, NotFoundError, CategoryNotEmptyError } from "@/lib/sourceStore";
-import { requireAdmin, requireTrustedOrigin, checkRateLimit } from "@/lib/apiGuard";
+import { removeUserCategory } from "@/lib/db/userSources";
+import { NotFoundError, CategoryNotEmptyError } from "@/lib/sourceStore";
+import { requireSession, requireTrustedOrigin, checkRateLimit } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
 export async function DELETE(req: NextRequest, ctx: RouteContext<"/api/categories/[id]">) {
   const originError = requireTrustedOrigin(req);
   if (originError) return originError;
-  const authError = requireAdmin(req);
-  if (authError) return authError;
+  const session = await requireSession();
+  if (session instanceof Response) return session;
   const rateLimitError = checkRateLimit(req, "mutate-sources", 20, 60 * 60 * 1000);
   if (rateLimitError) return rateLimitError;
 
@@ -17,7 +18,7 @@ export async function DELETE(req: NextRequest, ctx: RouteContext<"/api/categorie
   const force = req.nextUrl.searchParams.get("force") === "true";
 
   try {
-    await removeCategory(id, { force });
+    await removeUserCategory(session.user.id, id, { force });
     revalidatePath("/");
     return Response.json({ ok: true });
   } catch (err) {

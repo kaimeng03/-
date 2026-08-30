@@ -1,0 +1,17 @@
+{
+  "profession": "education",
+  "sources": [
+    {
+      "name": "Inside Higher Ed",
+      "homepage": "https://www.insidehighered.com",
+      "feedUrl": "https://www.insidehighered.com/rss.xml",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 RSS 端點發送即時請求，回應 HTTP 200 且內容為有效 rss/xml。"
+    }
+  ]
+}

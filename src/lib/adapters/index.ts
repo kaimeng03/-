@@ -1,4 +1,5 @@
 import { fetchTwarchitectNews } from "./twarchitect";
+import { fetchGenericHtmlNews } from "./genericHtml";
 import type { HtmlAdapterArticle } from "./types";
 
 export type { HtmlAdapterArticle };
@@ -12,6 +13,7 @@ type AdapterFn = (pageUrl: string) => Promise<HtmlAdapterArticle[]>;
 // and one entry here.
 const ADAPTERS: Record<string, AdapterFn> = {
   twarchitect: fetchTwarchitectNews,
+  generic_html: fetchGenericHtmlNews,
 };
 
 export function getHtmlAdapter(name: string | undefined): AdapterFn | null {

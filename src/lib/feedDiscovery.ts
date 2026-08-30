@@ -9,6 +9,8 @@
 // revalidation apply here too, not just to the RSS parser and article extractor.
 
 import { safeFetch, readBodyWithLimit, validateUrlForFetch, UnsafeUrlError } from "./safeFetch";
+import { findFeedLinks } from "./connectors/htmlLinks";
+import { stripTrackingParams } from "./connectors/trackingParams";
 
 const COMMON_FEED_PATHS = ["/feed", "/feed/", "/rss", "/rss.xml", "/feed.xml", "/atom.xml"];
 const FETCH_TIMEOUT_MS = 10000;
@@ -60,33 +62,41 @@ function looksLikeHtml(doc: FetchedDoc): boolean {
   return /<html[\s>]/i.test(doc.text.slice(0, 500));
 }
 
-function findAutodiscoveryLink(html: string, baseUrl: string): string | null {
-  const linkTagRe = /<link\b[^>]*>/gi;
-  let match: RegExpExecArray | null;
-  const candidates: string[] = [];
-  while ((match = linkTagRe.exec(html))) {
-    const tag = match[0];
-    if (!/rel=["']alternate["']/i.test(tag)) continue;
-    if (!/type=["'](application\/rss\+xml|application\/atom\+xml)["']/i.test(tag)) continue;
-    const hrefMatch = /href=["']([^"']+)["']/i.exec(tag);
-    if (hrefMatch) candidates.push(hrefMatch[1]);
-  }
+/** Finds the first working <link rel="alternate"> feed, trying every
+ *  candidate (not just the first) since a page can list a non-working one
+ *  first (e.g. a comments feed) before the real article feed. */
+async function findAutodiscoveryLink(html: string, baseUrl: string): Promise<string | null> {
+  const candidates = findFeedLinks(html, baseUrl);
   for (const href of candidates) {
-    try {
-      return new URL(href, baseUrl).toString();
-    } catch {
-      continue;
-    }
+    const doc = await fetchDoc(href, PROBE_TIMEOUT_MS);
+    if (doc && doc.ok && looksLikeFeed(doc)) return doc.finalUrl;
   }
   return null;
+}
+
+/** Common feed paths to probe, both at the site origin and — when the input
+ *  URL has its own path, e.g. https://example.com/blog/ — relative to that
+ *  path too (so /blog/feed, /blog/rss.xml etc are tried, not just /feed). */
+function candidateFeedPaths(parsed: URL): string[] {
+  const origin = `${parsed.protocol}//${parsed.host}`;
+  const paths = new Set(COMMON_FEED_PATHS.map((p) => origin + p));
+
+  const dirPath = parsed.pathname.endsWith("/") ? parsed.pathname : parsed.pathname.replace(/[^/]*$/, "");
+  if (dirPath && dirPath !== "/") {
+    const base = origin + dirPath.replace(/\/+$/, "");
+    for (const p of COMMON_FEED_PATHS) paths.add(base + p);
+  }
+  return [...paths];
 }
 
 export type DiscoveryResult = { ok: true; feedUrl: string } | { ok: false; error: string };
 
 export async function discoverFeed(inputUrl: string): Promise<DiscoveryResult> {
+  const cleanedUrl = stripTrackingParams(inputUrl.trim());
+
   let parsed: URL;
   try {
-    const validated = await validateUrlForFetch(inputUrl);
+    const validated = await validateUrlForFetch(cleanedUrl);
     parsed = validated.url;
   } catch (err) {
     return { ok: false, error: err instanceof UnsafeUrlError ? err.message : "網址格式不正確" };
@@ -102,18 +112,14 @@ export async function discoverFeed(inputUrl: string): Promise<DiscoveryResult> {
   }
 
   if (direct.ok && looksLikeHtml(direct)) {
-    const discoveredUrl = findAutodiscoveryLink(direct.text, direct.finalUrl);
+    const discoveredUrl = await findAutodiscoveryLink(direct.text, direct.finalUrl);
     if (discoveredUrl) {
-      const feedDoc = await fetchDoc(discoveredUrl, PROBE_TIMEOUT_MS);
-      if (feedDoc && feedDoc.ok && looksLikeFeed(feedDoc)) {
-        return { ok: true, feedUrl: feedDoc.finalUrl };
-      }
+      return { ok: true, feedUrl: discoveredUrl };
     }
   }
 
-  const origin = `${parsed.protocol}//${parsed.host}`;
-  for (const path of COMMON_FEED_PATHS) {
-    const doc = await fetchDoc(origin + path, PROBE_TIMEOUT_MS);
+  for (const path of candidateFeedPaths(parsed)) {
+    const doc = await fetchDoc(path, PROBE_TIMEOUT_MS);
     if (doc && doc.ok && looksLikeFeed(doc)) {
       return { ok: true, feedUrl: doc.finalUrl };
     }

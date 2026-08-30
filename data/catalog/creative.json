@@ -1,0 +1,41 @@
+{
+  "profession": "creative",
+  "sources": [
+    {
+      "name": "Creative Bloq",
+      "homepage": "https://www.creativebloq.com",
+      "feedUrl": "https://www.creativebloq.com/feeds.xml",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": "US",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 RSS 端點發送即時請求，回應 HTTP 200 且內容為有效 rss/xml。"
+    },
+    {
+      "name": "Smashing Magazine",
+      "homepage": "https://www.smashingmagazine.com",
+      "feedUrl": "https://www.smashingmagazine.com/feed/",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "en",
+      "country": null,
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "以 curl 對官方 RSS 端點發送即時請求，回應 HTTP 200 且內容為有效 rss/xml。"
+    },
+    {
+      "name": "中央社文化新聞",
+      "homepage": "https://www.cna.com.tw/list/acul.aspx",
+      "feedUrl": "https://feeds.feedburner.com/rsscna/culture",
+      "connectorType": "rss",
+      "provider": "generic",
+      "language": "zh-Hant",
+      "country": "TW",
+      "contentType": "news",
+      "accessType": "free",
+      "verificationNote": "2026-08-30 以 newskill 解析器成功預覽中央社文化 RSS，抽查項目全部連回 cna.com.tw 官方文章網域。"
+    }
+  ]
+}

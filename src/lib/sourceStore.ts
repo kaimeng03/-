@@ -5,6 +5,7 @@ import { FALLBACK_CONFIG, type Category, type Source, type SourcesConfig } from 
 import { discoverFeed } from "./feedDiscovery";
 import { safeFetch, readBodyWithLimit, UnsafeUrlError } from "./safeFetch";
 import { matchHtmlSourceAdapter, getHtmlAdapter } from "./adapters";
+import { normalizeUrl } from "./normalizeUrl";
 
 const LOCAL_FILE = path.join(process.cwd(), "data", "sources.json");
 const GITHUB_API = "https://api.github.com";
@@ -42,17 +43,6 @@ function uniqueId(base: string, existingIds: Set<string>): string {
   let i = 2;
   while (existingIds.has(`${base}-${i}`)) i++;
   return `${base}-${i}`;
-}
-
-function normalizeUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    u.hash = "";
-    const p = u.pathname.replace(/\/+$/, "");
-    return `${u.protocol}//${u.host}${p}${u.search}`.toLowerCase();
-  } catch {
-    return url.trim().toLowerCase();
-  }
 }
 
 interface GithubFile {
@@ -124,6 +114,13 @@ async function readLocal(): Promise<SourcesConfig> {
 
 async function writeLocal(config: SourcesConfig): Promise<void> {
   await fs.writeFile(LOCAL_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+}
+
+/** Always reads the repo's data/sources.json directly — used by the legacy
+ *  import flow, which is explicitly about that file, not whatever the current
+ *  live admin store (possibly GitHub-backed) happens to contain. */
+export async function readLegacySourcesJsonFile(): Promise<SourcesConfig> {
+  return readLocal();
 }
 
 export async function getSourcesConfig(): Promise<SourcesConfig> {
