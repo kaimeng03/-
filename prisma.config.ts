@@ -12,7 +12,8 @@ export default defineConfig({
   datasource: {
     url: env("DATABASE_URL"),
     // Optional — only needed for `prisma migrate dev` in local development.
-    // Not used by `migrate deploy` (production), so safe to leave unset there.
-    shadowDatabaseUrl: env("SHADOW_DATABASE_URL"),
+    // Not used by `migrate deploy` (production). `env()` throws when the
+    // variable is unset, so read it directly to actually allow that.
+    shadowDatabaseUrl: process.env.SHADOW_DATABASE_URL,
   },
 });
