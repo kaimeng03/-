@@ -14,7 +14,20 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "newskill",
-  description: "newskill — 個人化的建築新聞閱讀器",
+  description: "newskill — 你的個人新聞閱讀器",
+  applicationName: "newskill",
+  openGraph: {
+    title: "newskill",
+    description: "你的個人新聞閱讀器",
+    siteName: "newskill",
+    type: "website",
+    locale: "zh_TW",
+  },
+  twitter: {
+    card: "summary",
+    title: "newskill",
+    description: "你的個人新聞閱讀器",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
