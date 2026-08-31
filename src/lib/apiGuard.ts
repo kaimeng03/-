@@ -8,7 +8,7 @@ import type { Session } from "next-auth";
 export function requireTrustedOrigin(req: NextRequest): Response | null {
   const result = checkTrustedOrigin(req);
   if (!result.ok) {
-    return Response.json({ error: "跨來源請求已被拒絕" }, { status: 403 });
+    return privateJson({ error: "跨來源請求已被拒絕" }, { status: 403 });
   }
   return null;
 }
@@ -24,19 +24,36 @@ export async function requireSession(): Promise<Session | Response> {
   const { auth } = await import("@/auth");
   const session = await auth();
   if (!session?.user) {
-    return Response.json({ error: "需要登入" }, { status: 401 });
+    return privateJson({ error: "需要登入" }, { status: 401 });
   }
   return session;
 }
 
 /** Returns a 429 Response if the caller has exceeded the given limit, else null. */
-export function checkRateLimit(req: NextRequest, bucket: string, limit: number, windowMs: number): Response | null {
-  const result = rateLimit(`${bucket}:${clientIp(req)}`, limit, windowMs);
+export function checkRateLimit(
+  req: NextRequest,
+  bucket: string,
+  limit: number,
+  windowMs: number,
+  subject?: string,
+): Response | null {
+  // Expensive authenticated endpoints can use the stable session user id
+  // instead of a spoofable/shared client IP. Existing callers remain IP-based.
+  const result = rateLimit(`${bucket}:${subject || clientIp(req)}`, limit, windowMs);
   if (!result.ok) {
-    return Response.json(
+    return privateJson(
       { error: "操作過於頻繁，請稍後再試" },
       { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } },
     );
   }
   return null;
+}
+
+/** Session-scoped or security-sensitive JSON must not be stored by a browser,
+ * CDN, or shared intermediary. */
+export function privateJson(data: unknown, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set("Cache-Control", "private, no-store, max-age=0");
+  headers.set("Pragma", "no-cache");
+  return Response.json(data, { ...init, headers });
 }

@@ -1,13 +1,33 @@
 import { NextRequest } from "next/server";
 import { safeFetch, capStream, UnsafeUrlError } from "@/lib/safeFetch";
+import { checkRateLimit, requireSession } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20MB
+const MAX_URL_CHARS = 4_096;
+const ALLOWED_IMAGE_TYPES = new Set([
+  "image/avif",
+  "image/apng",
+  "image/bmp",
+  "image/gif",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/vnd.microsoft.icon",
+  "image/webp",
+  "image/x-icon",
+]);
 
 export async function GET(req: NextRequest) {
+  const session = await requireSession();
+  if (session instanceof Response) return session;
+  const rateLimitError = checkRateLimit(req, "image-proxy", 1_000, 60 * 60 * 1000, session.user.id);
+  if (rateLimitError) return rateLimitError;
+
   const url = req.nextUrl.searchParams.get("url");
   if (!url) return new Response("Missing url", { status: 400 });
+  if (url.length > MAX_URL_CHARS) return new Response("URL too long", { status: 414 });
 
   let hostname: string;
   try {
@@ -35,9 +55,16 @@ export async function GET(req: NextRequest) {
       return new Response("Upstream error", { status: 502 });
     }
 
-    const contentType = upstream.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) {
+    const contentType = (upstream.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
+    // SVG is active content when opened as a same-origin document. Passing only
+    // known raster formats prevents the proxy from becoming a script host.
+    if (!ALLOWED_IMAGE_TYPES.has(contentType)) {
       return new Response("Not an image", { status: 415 });
+    }
+
+    const contentLength = Number(upstream.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
+      return new Response("Image too large", { status: 413 });
     }
 
     // Deliberately not forwarding any other upstream headers (Set-Cookie included) —
@@ -45,7 +72,10 @@ export async function GET(req: NextRequest) {
     return new Response(capStream(upstream.body, MAX_IMAGE_BYTES), {
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "public, max-age=86400",
+        "Cache-Control": "private, max-age=86400",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "X-Content-Type-Options": "nosniff",
+        Vary: "Cookie",
       },
     });
   } catch (err) {

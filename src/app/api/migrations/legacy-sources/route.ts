@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { revalidatePath } from "next/cache";
 import { getLegacySourcesImportStatus, importLegacySources } from "@/lib/db/legacyImport";
-import { requireSession, requireTrustedOrigin, checkRateLimit } from "@/lib/apiGuard";
+import { requireSession, requireTrustedOrigin, checkRateLimit, privateJson } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 
@@ -10,7 +10,7 @@ export async function GET() {
   if (session instanceof Response) return session;
 
   const status = await getLegacySourcesImportStatus(session.user.id, session.user.email);
-  return Response.json(status);
+  return privateJson(status);
 }
 
 export async function POST(req: NextRequest) {

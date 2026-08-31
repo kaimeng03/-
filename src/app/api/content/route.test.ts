@@ -1,5 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NextRequest } from "next/server";
+import type { Session } from "next-auth";
+
+vi.mock("@/auth", () => ({ auth: vi.fn() }));
 
 const extractArticleMock = vi.fn();
 vi.mock("@/lib/extract", async () => {
@@ -17,18 +20,75 @@ vi.mock("@/lib/translate", () => ({
 
 import { POST } from "./route";
 import { translateText, translateMany } from "@/lib/translate";
+import { auth } from "@/auth";
 
-function makeRequest(body: unknown): NextRequest {
-  return { json: async () => body } as unknown as NextRequest;
+const mockedAuth = vi.mocked(auth);
+
+function fakeSession(userId = "user-1"): Session {
+  return {
+    user: { id: userId, professionKey: null, customProfession: null, onboardingCompleted: true, role: "user" },
+    expires: new Date(Date.now() + 60_000).toISOString(),
+  } as Session;
+}
+
+function makeRequest(
+  body: unknown,
+  options: { origin?: string | null; contentLength?: string | null } = {},
+): NextRequest {
+  const origin = "origin" in options ? options.origin : "https://example.com";
+  return {
+    headers: {
+      get: (name: string) => {
+        if (name.toLowerCase() === "origin") return origin ?? null;
+        if (name.toLowerCase() === "content-length") return options.contentLength ?? null;
+        return null;
+      },
+    },
+    json: async () => body,
+  } as unknown as NextRequest;
 }
 
 beforeEach(() => {
   extractArticleMock.mockReset();
   vi.mocked(translateText).mockReset().mockImplementation(async (s: string) => `ZH:${s}`);
   vi.mocked(translateMany).mockReset().mockImplementation(async (texts: string[]) => texts.map((t) => `ZH:${t}`));
+  mockedAuth.mockReset().mockResolvedValue(fakeSession() as never);
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://example.com");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("POST /api/content — feedOnly", () => {
+  it("rejects an untrusted origin before doing extraction work", async () => {
+    const res = await POST(makeRequest({ url: "https://example.com/a" }, { origin: "https://evil.example.net" }));
+    expect(res.status).toBe(403);
+    expect(extractArticleMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 without a session", async () => {
+    mockedAuth.mockResolvedValue(null as never);
+    const res = await POST(makeRequest({ url: "https://example.com/a" }));
+    expect(res.status).toBe(401);
+    expect(extractArticleMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized declared request before parsing JSON", async () => {
+    const json = vi.fn();
+    const req = makeRequest({ url: "https://example.com/a" }, { contentLength: "1100001" });
+    Object.assign(req, { json });
+    const res = await POST(req);
+    expect(res.status).toBe(413);
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it("returns private no-store responses", async () => {
+    const res = await POST(makeRequest({ url: "https://example.com/a", feedOnly: true }));
+    expect(res.headers.get("cache-control")).toContain("no-store");
+  });
+
   it("never calls extractArticle when feedOnly is true", async () => {
     const res = await POST(
       makeRequest({

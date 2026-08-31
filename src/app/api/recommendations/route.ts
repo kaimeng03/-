@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireSession } from "@/lib/apiGuard";
+import { privateJson, requireSession } from "@/lib/apiGuard";
 import { getRecommendedSources } from "@/lib/db/userSources";
 
 export const runtime = "nodejs";
@@ -15,5 +15,5 @@ export async function GET(req: NextRequest) {
   const professionKey = professionParam || session.user.professionKey;
 
   const sources = await getRecommendedSources(session.user.id, professionKey);
-  return Response.json({ sources });
+  return privateJson({ sources });
 }

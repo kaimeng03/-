@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireSession } from "@/lib/apiGuard";
+import { privateJson, requireSession } from "@/lib/apiGuard";
 import { searchCatalog } from "@/lib/db/userSources";
 import { isKnownProfessionKey } from "@/lib/professions";
 
@@ -31,5 +31,5 @@ export async function GET(req: NextRequest) {
   const accessType = allowlisted(params.get("accessType"), ACCESS_TYPES);
 
   const sources = await searchCatalog(session.user.id, { query, professionKey, language, country, contentType, accessType });
-  return Response.json({ sources });
+  return privateJson({ sources });
 }

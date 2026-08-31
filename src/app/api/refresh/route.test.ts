@@ -9,15 +9,18 @@ import { auth } from "@/auth";
 
 const mockedAuth = vi.mocked(auth);
 
-function makeRequest(headers: Record<string, string> = {}): NextRequest {
+function makeRequest(headers: Record<string, string> = {}, includeOrigin = true): NextRequest {
+  const normalized = includeOrigin ? { origin: "https://example.com", ...headers } : headers;
   return {
-    headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
+    headers: { get: (name: string) => normalized[name.toLowerCase()] ?? null },
   } as unknown as NextRequest;
 }
 
 beforeEach(() => {
   mockedAuth.mockReset();
   vi.unstubAllEnvs();
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://example.com");
 });
 
 afterEach(() => {
@@ -37,11 +40,17 @@ describe("POST /api/refresh — not anonymously triggerable", () => {
     expect(res.status).toBe(200);
   });
 
+  it("rejects a cross-site manual refresh even for a logged-in session", async () => {
+    mockedAuth.mockResolvedValue({ user: { id: "u1" } } as never);
+    const res = await POST(makeRequest({ origin: "https://evil.example.net" }));
+    expect(res.status).toBe(403);
+  });
+
   it("succeeds with a correct CRON_SECRET bearer token, without any session", async () => {
     vi.stubEnv("CRON_SECRET", "shh-its-a-secret");
     mockedAuth.mockResolvedValue(null as never);
 
-    const res = await POST(makeRequest({ authorization: "Bearer shh-its-a-secret" }));
+    const res = await POST(makeRequest({ authorization: "Bearer shh-its-a-secret" }, false));
     expect(res.status).toBe(200);
     expect(mockedAuth).not.toHaveBeenCalled();
   });

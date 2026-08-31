@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireSession, requireTrustedOrigin, checkRateLimit } from "@/lib/apiGuard";
+import { requireSession, requireTrustedOrigin, checkRateLimit, privateJson } from "@/lib/apiGuard";
 import { prisma } from "@/lib/db/prisma";
 
 export const runtime = "nodejs";
@@ -8,7 +8,7 @@ export async function GET() {
   const session = await requireSession();
   if (session instanceof Response) return session;
 
-  return Response.json({
+  return privateJson({
     id: session.user.id,
     name: session.user.name ?? null,
     email: session.user.email ?? null,
@@ -37,5 +37,5 @@ export async function DELETE(req: NextRequest) {
   if (rateLimitError) return rateLimitError;
 
   await prisma.user.delete({ where: { id: session.user.id } });
-  return Response.json({ ok: true });
+  return privateJson({ ok: true });
 }

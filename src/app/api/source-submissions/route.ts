@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireSession, requireTrustedOrigin, checkRateLimit } from "@/lib/apiGuard";
+import { requireSession, requireTrustedOrigin, checkRateLimit, privateJson } from "@/lib/apiGuard";
 import { createSourceSubmission, listUserSourceSubmissions } from "@/lib/db/sourceSubmissions";
 import type { ConnectorErrorCode } from "@/lib/connectors/errors";
 
@@ -26,7 +26,7 @@ export async function GET() {
   if (session instanceof Response) return session;
 
   const submissions = await listUserSourceSubmissions(session.user.id);
-  return Response.json({ submissions });
+  return privateJson({ submissions });
 }
 
 export async function POST(req: NextRequest) {
