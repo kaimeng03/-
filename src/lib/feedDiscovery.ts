@@ -15,8 +15,9 @@ import { stripTrackingParams } from "./connectors/trackingParams";
 
 const COMMON_FEED_PATHS = ["/feed", "/feed/", "/rss", "/rss.xml", "/feed.xml", "/atom.xml"];
 const FETCH_TIMEOUT_MS = 10000;
-const PROBE_TIMEOUT_MS = 6000;
+const PROBE_TIMEOUT_MS = 3500;
 const MAX_DOC_BYTES = 5 * 1024 * 1024;
+const PROBE_CONCURRENCY = 4;
 
 interface FetchedDoc {
   ok: boolean;
@@ -24,6 +25,7 @@ interface FetchedDoc {
   contentType: string;
   text: string;
   finalUrl: string;
+  retryAfter?: number;
 }
 
 async function fetchDoc(url: string, timeoutMs: number): Promise<FetchedDoc | null> {
@@ -36,12 +38,15 @@ async function fetchDoc(url: string, timeoutMs: number): Promise<FetchedDoc | nu
       timeoutMs,
     });
     const buf = await readBodyWithLimit(response, MAX_DOC_BYTES);
+    const retryAfterHeader = response.headers.get("retry-after");
+    const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : undefined;
     return {
       ok: response.ok,
       status: response.status,
       contentType: response.headers.get("content-type") || "",
       text: new TextDecoder("utf-8").decode(buf),
       finalUrl,
+      ...(Number.isFinite(retryAfter) ? { retryAfter } : {}),
     };
   } catch {
     // Covers network errors, timeouts, and SSRF rejections alike — a probe
@@ -80,7 +85,7 @@ async function findAutodiscoveryLink(html: string, baseUrl: string): Promise<str
  *  path too (so /blog/feed, /blog/rss.xml etc are tried, not just /feed). */
 function candidateFeedPaths(parsed: URL): string[] {
   const origin = `${parsed.protocol}//${parsed.host}`;
-  const paths = new Set(COMMON_FEED_PATHS.map((p) => origin + p));
+  const paths = new Set<string>();
 
   // A URL such as /section/news is often a section directory even without a
   // trailing slash. Probe both /section/news/feed and the parent /section/feed.
@@ -91,17 +96,25 @@ function candidateFeedPaths(parsed: URL): string[] {
     for (const p of COMMON_FEED_PATHS) paths.add(base + p);
   }
 
+  for (const p of COMMON_FEED_PATHS) paths.add(origin + p);
+
   const dirPath = parsed.pathname.endsWith("/") ? parsed.pathname : parsed.pathname.replace(/[^/]*$/, "");
   if (dirPath && dirPath !== "/") {
     const base = origin + dirPath.replace(/\/+$/, "");
     for (const p of COMMON_FEED_PATHS) paths.add(base + p);
   }
-  return [...paths];
+  return [...paths].slice(0, 12);
 }
 
-export type DiscoveryResult = { ok: true; feedUrl: string } | { ok: false; error: string };
+export type DiscoveryResult =
+  | { ok: true; feedUrl: string }
+  | { ok: false; error: string; retryAfter?: number };
 
-export async function discoverFeed(inputUrl: string): Promise<DiscoveryResult> {
+export interface DiscoverFeedOptions {
+  probeCommonPaths?: boolean;
+}
+
+export async function discoverFeed(inputUrl: string, options: DiscoverFeedOptions = {}): Promise<DiscoveryResult> {
   const cleanedUrl = stripTrackingParams(inputUrl.trim());
 
   let parsed: URL;
@@ -121,6 +134,12 @@ export async function discoverFeed(inputUrl: string): Promise<DiscoveryResult> {
     return { ok: true, feedUrl: direct.finalUrl };
   }
 
+  if (!direct.ok) {
+    if (direct.status === 429) return { ok: false, error: "RATE_LIMITED", retryAfter: direct.retryAfter };
+    if (direct.status === 401) return { ok: false, error: "LOGIN_REQUIRED" };
+    if (direct.status === 403) return { ok: false, error: "ACCESS_BLOCKED" };
+  }
+
   if (direct.ok && looksLikeHtml(direct)) {
     const discoveredUrl = await findAutodiscoveryLink(direct.text, direct.finalUrl);
     if (discoveredUrl) {
@@ -138,10 +157,16 @@ export async function discoverFeed(inputUrl: string): Promise<DiscoveryResult> {
     }
   }
 
-  for (const path of candidateFeedPaths(parsed)) {
-    const doc = await fetchDoc(path, PROBE_TIMEOUT_MS);
-    if (doc && doc.ok && looksLikeFeed(doc)) {
-      return { ok: true, feedUrl: doc.finalUrl };
+  if (options.probeCommonPaths !== false) {
+    const candidates = candidateFeedPaths(parsed);
+    for (let start = 0; start < candidates.length; start += PROBE_CONCURRENCY) {
+      const docs = await Promise.all(
+        candidates.slice(start, start + PROBE_CONCURRENCY).map((path) => fetchDoc(path, PROBE_TIMEOUT_MS)),
+      );
+      const match = docs.find((doc) => doc && doc.ok && looksLikeFeed(doc));
+      if (match) {
+        return { ok: true, feedUrl: match.finalUrl };
+      }
     }
   }
 

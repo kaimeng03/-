@@ -9,7 +9,6 @@ vi.mock("@/auth", () => ({
 }));
 
 vi.mock("@/lib/db/userSources", () => ({ getUserSourcesConfig: vi.fn() }));
-vi.mock("@/lib/feeds", () => ({ fetchAllArticles: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
   redirect: vi.fn((url: string) => {
@@ -20,17 +19,14 @@ vi.mock("next/navigation", () => ({
 import Home from "./page";
 import { auth } from "@/auth";
 import { getUserSourcesConfig } from "@/lib/db/userSources";
-import { fetchAllArticles } from "@/lib/feeds";
 
 const mockedAuth = vi.mocked(auth);
 const mockedGetUserSourcesConfig = vi.mocked(getUserSourcesConfig);
-const mockedFetchAllArticles = vi.mocked(fetchAllArticles);
 
 beforeEach(() => {
   vi.restoreAllMocks();
   mockedAuth.mockReset();
   mockedGetUserSourcesConfig.mockReset();
-  mockedFetchAllArticles.mockReset();
   delete process.env.AUTH_GOOGLE_ID;
   delete process.env.AUTH_GOOGLE_SECRET;
 });
@@ -51,7 +47,6 @@ describe("Home page — unauthenticated visitors", () => {
 
     expect(screen.getByText("newskill")).toBeInTheDocument();
     expect(mockedGetUserSourcesConfig).not.toHaveBeenCalled();
-    expect(mockedFetchAllArticles).not.toHaveBeenCalled();
   });
 
   it("shows a clear message (not a blank screen) when Google OAuth isn't configured", async () => {
@@ -77,19 +72,17 @@ describe("Home page — unauthenticated visitors", () => {
 });
 
 describe("Home page — authenticated users", () => {
-  it("loads only this user's subscribed sources and fetches their articles", async () => {
+  it("loads only this user's subscribed sources and defers external article fetching", async () => {
     mockedAuth.mockResolvedValue(fakeSession("u1"));
     const sources: Source[] = [
       { id: "s1", name: "ArchDaily", homepage: "https://archdaily.com", feedUrl: "https://archdaily.com/rss", categoryId: "c1" },
     ];
     mockedGetUserSourcesConfig.mockResolvedValue({ categories: [{ id: "c1", name: "建築新聞" }], sources });
-    mockedFetchAllArticles.mockResolvedValue({ articles: [], failedSourceNames: [] });
 
     const ui = await Home({ searchParams: Promise.resolve({}) });
     render(ui);
 
     expect(mockedGetUserSourcesConfig).toHaveBeenCalledWith("u1");
-    expect(mockedFetchAllArticles).toHaveBeenCalledWith(sources);
     expect(screen.queryByText("使用 Google 帳號登入")).not.toBeInTheDocument();
   });
 
@@ -100,7 +93,6 @@ describe("Home page — authenticated users", () => {
     const ui = await Home({ searchParams: Promise.resolve({}) });
     render(ui);
 
-    expect(mockedFetchAllArticles).not.toHaveBeenCalled();
     expect(screen.getByText("你的新聞首頁還是空的")).toBeInTheDocument();
   });
 

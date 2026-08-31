@@ -35,6 +35,10 @@ const dict = {
     cancel: "取消",
     genericAddCategoryError: "新增分類失敗",
     genericAddSourceError: "新增網站失敗",
+    sourceAddedSuccess: "已成功加入新聞來源",
+    loadingNews: "正在載入你的新聞…",
+    newsLoadFailed: "新聞暫時載入失敗，其他功能仍可使用。",
+    retry: "再試一次",
 
     // Content-gate notices (section 4)
     gateLoginWall: "原網站限制全文存取（需要登入或訂閱），以下為 RSS 提供的內容。",
@@ -220,6 +224,10 @@ const dict = {
     cancel: "Cancel",
     genericAddCategoryError: "Failed to add category",
     genericAddSourceError: "Failed to add website",
+    sourceAddedSuccess: "News source added",
+    loadingNews: "Loading your news…",
+    newsLoadFailed: "News could not be loaded right now. Other features are still available.",
+    retry: "Try again",
 
     gateLoginWall: "The original site restricts full access (login/subscription required) — showing RSS-provided content below.",
     gateChallenge: "The original site currently has bot-verification enabled, so the full article couldn't be fetched automatically — showing RSS-provided content below.",

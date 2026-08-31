@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -49,11 +49,12 @@ export default function NewsApp({
   initialArticles,
   categories,
   sources,
-  failedSourceNames,
-  lastUpdated,
+  failedSourceNames: initialFailedSourceNames,
+  lastUpdated: initialLastUpdated,
   user,
   signOutAction,
   professionKey,
+  loadArticlesClientSide = false,
 }: {
   initialArticles: Article[];
   categories: Category[];
@@ -63,9 +64,14 @@ export default function NewsApp({
   user?: { name: string | null; email: string | null; image: string | null };
   signOutAction?: () => Promise<void>;
   professionKey?: string | null;
+  loadArticlesClientSide?: boolean;
 }) {
   const router = useRouter();
-  const articles = initialArticles;
+  const [articles, setArticles] = useState(initialArticles);
+  const [failedSourceNames, setFailedSourceNames] = useState(initialFailedSourceNames);
+  const [lastUpdated, setLastUpdated] = useState(initialLastUpdated);
+  const [articlesLoading, setArticlesLoading] = useState(loadArticlesClientSide && sources.length > 0);
+  const [articlesError, setArticlesError] = useState<string | null>(null);
   const [lang, setLang] = useLang();
 
   const [filter, setFilter] = useState<Filter>({ type: "all" });
@@ -80,6 +86,7 @@ export default function NewsApp({
   const [justRefreshed, setJustRefreshed] = useState(false);
   const seenUpdatedAt = useRef(lastUpdated);
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const articleRequestId = useRef(0);
 
   const [addingCategory, setAddingCategory] = useState(false);
   const [addingSource, setAddingSource] = useState(false);
@@ -89,6 +96,46 @@ export default function NewsApp({
   const [deleting, setDeleting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const readState = useReadState(setToast);
+  const sourceKey = useMemo(
+    () => sources.map((source) => `${source.id}:${source.categoryId}`).sort().join("|"),
+    [sources],
+  );
+
+  const loadArticles = useCallback(async (): Promise<boolean> => {
+    if (!loadArticlesClientSide) return false;
+    const requestId = ++articleRequestId.current;
+    if (sources.length === 0) {
+      setArticles([]);
+      setFailedSourceNames([]);
+      setArticlesError(null);
+      setArticlesLoading(false);
+      return true;
+    }
+
+    setArticlesLoading(true);
+    setArticlesError(null);
+    try {
+      const res = await fetch("/api/articles", { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Could not load news");
+      if (requestId !== articleRequestId.current) return false;
+      setArticles(Array.isArray(data.articles) ? data.articles : []);
+      setFailedSourceNames(Array.isArray(data.failedSourceNames) ? data.failedSourceNames : []);
+      if (typeof data.lastUpdated === "string") setLastUpdated(data.lastUpdated);
+      return true;
+    } catch (err) {
+      if (requestId !== articleRequestId.current) return false;
+      setArticlesError(err instanceof Error ? err.message : "Could not load news");
+      return false;
+    } finally {
+      if (requestId === articleRequestId.current) setArticlesLoading(false);
+    }
+  }, [loadArticlesClientSide, sources.length]);
+
+  useEffect(() => {
+    if (!loadArticlesClientSide) return;
+    void Promise.resolve().then(() => loadArticles());
+  }, [loadArticles, loadArticlesClientSide, sourceKey]);
 
   useEffect(() => {
     document.documentElement.lang = lang === "zh" ? "zh-Hant" : "en";
@@ -210,6 +257,10 @@ export default function NewsApp({
     refreshTimeoutRef.current = setTimeout(() => setRefreshing(false), REFRESH_TIMEOUT_MS);
     try {
       await fetch("/api/refresh", { method: "POST" });
+      if (loadArticlesClientSide) {
+        await loadArticles();
+        return;
+      }
     } catch {
       // still ask for a re-render below; the timeout above clears the spinner if nothing comes back
     }
@@ -400,6 +451,7 @@ export default function NewsApp({
               initialProfessionKey={professionKey ?? null}
               onDone={() => {
                 setAddingSource(false);
+                setToast(t(lang, "sourceAddedSuccess"));
                 router.refresh();
               }}
               onCancel={() => setAddingSource(false)}
@@ -506,6 +558,22 @@ export default function NewsApp({
             selected ? "hidden md:block" : "block"
           }`}
         >
+          {articlesLoading && articles.length === 0 && sources.length > 0 && (
+            <li className="p-6 text-center text-sm text-neutral-500" role="status">
+              <div className="mx-auto mb-3 h-1.5 w-28 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                <div className="h-full w-1/2 animate-pulse rounded-full bg-neutral-500" />
+              </div>
+              {t(lang, "loadingNews")}
+            </li>
+          )}
+          {articlesError && articles.length === 0 && sources.length > 0 && !articlesLoading && (
+            <li className="p-6 text-center text-sm text-red-600 dark:text-red-400">
+              <p className="mb-2">{t(lang, "newsLoadFailed")}</p>
+              <button type="button" onClick={() => void loadArticles()} className="underline">
+                {t(lang, "retry")}
+              </button>
+            </li>
+          )}
           {filtered.length === 0 && sources.length === 0 && (
             <li className="p-6 text-center">
               <p className="mb-1 text-sm font-medium">{t(lang, "emptyHomeTitle")}</p>
@@ -515,7 +583,7 @@ export default function NewsApp({
               </Link>
             </li>
           )}
-          {filtered.length === 0 && sources.length > 0 && (
+          {filtered.length === 0 && sources.length > 0 && !articlesLoading && !articlesError && (
             <li className="p-6 text-center text-sm text-neutral-500">
               {articles.length === 0 ? t(lang, "noArticles") : t(lang, "noArticlesFiltered")}
             </li>

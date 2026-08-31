@@ -531,6 +531,7 @@ function ManualTab({
   async function confirm() {
     if (!preview?.previewToken) return;
     setConfirming(true);
+    setError(null);
     try {
       const res = await fetch("/api/source-discovery/confirm", {
         method: "POST",
@@ -543,6 +544,8 @@ function ManualTab({
         return;
       }
       onDone();
+    } catch {
+      setError({ message: t(lang, "genericAddSourceError") });
     } finally {
       setConfirming(false);
     }

@@ -114,8 +114,19 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+export interface TranslateManyOptions {
+  /** Limits requests to the slow public fallback. Azure batch translation, when
+   * configured, still translates the complete input. Untranslated entries
+   * retain their original text. */
+  maxFallbackItems?: number;
+}
+
 /** Translates each string; falls back to the original text on failure. Empty strings pass through. */
-export async function translateMany(texts: string[], targetLang = "zh-TW"): Promise<string[]> {
+export async function translateMany(
+  texts: string[],
+  targetLang = "zh-TW",
+  options: TranslateManyOptions = {},
+): Promise<string[]> {
   const nonEmptyIndexes = texts
     .map((t, i) => (t.trim() ? i : -1))
     .filter((i) => i !== -1);
@@ -139,16 +150,23 @@ export async function translateMany(texts: string[], targetLang = "zh-TW"): Prom
     }
   }
 
+  const fallbackIndexes = nonEmptyIndexes.slice(0, options.maxFallbackItems ?? nonEmptyIndexes.length);
+  if (fallbackIndexes.length === 0) return texts;
+
   let failureCount = 0;
   let firstFailure: unknown = null;
-  const result = await mapWithConcurrency(texts, 4, async (t) => {
+  const translatedFallback = await mapWithConcurrency(fallbackIndexes, 4, async (index) => {
     try {
-      return await translateOneMyMemory(t, targetLang);
+      return await translateOneMyMemory(texts[index], targetLang);
     } catch (err) {
       failureCount++;
       firstFailure ??= err;
-      return t;
+      return texts[index];
     }
+  });
+  const result = [...texts];
+  fallbackIndexes.forEach((index, i) => {
+    result[index] = translatedFallback[i] || texts[index];
   });
 
   // One summary line instead of one stack trace per failed chunk — MyMemory's free
@@ -156,7 +174,7 @@ export async function translateMany(texts: string[], targetLang = "zh-TW"): Prom
   // print hundreds of near-identical errors for what is really a single condition.
   if (failureCount > 0) {
     console.warn(
-      `Translation unavailable for ${failureCount}/${texts.length} item(s); showing original text. ` +
+      `Translation unavailable for ${failureCount}/${fallbackIndexes.length} attempted item(s); showing original text. ` +
         `First failure: ${errorMessage(firstFailure)}`,
     );
   }

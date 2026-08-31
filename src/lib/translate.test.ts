@@ -35,4 +35,16 @@ describe("translateMany fallback logging", () => {
     expect(warning).toHaveBeenCalledOnce();
     expect(warning).toHaveBeenCalledWith(expect.stringContaining("Translate HTTP 429"));
   });
+
+  it("bounds public fallback requests for large feed batches", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ responseStatus: 200, responseData: { translatedText: "翻譯" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await translateMany(["one", "two", "three", "four"], "zh-TW", { maxFallbackItems: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(["翻譯", "翻譯", "three", "four"]);
+  });
 });

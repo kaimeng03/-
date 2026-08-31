@@ -45,13 +45,13 @@ const SAMPLE_ARTICLE = {
   preprint: null,
 };
 
-function response(status: number, headers: Record<string, string> = {}) {
+function response(status: number, headers: Record<string, string> = {}, body = "") {
   return {
     ok: status >= 200 && status < 300,
     status,
     headers: new Headers(headers),
     body: null,
-    arrayBuffer: async () => new ArrayBuffer(0),
+    arrayBuffer: async () => new TextEncoder().encode(body).buffer,
   } as unknown as Response;
 }
 
@@ -63,6 +63,28 @@ beforeEach(() => {
   previewEuropePmcMock.mockReset().mockResolvedValue([SAMPLE_ARTICLE]);
   previewCrossrefByQueryMock.mockReset().mockResolvedValue([SAMPLE_ARTICLE]);
   previewCrossrefByIssnMock.mockReset().mockResolvedValue([SAMPLE_ARTICLE]);
+});
+
+describe("discoverSource — public article listings are checked before guessed feed paths", () => {
+  it("creates a generic HTML preview without probing a long list of /feed URLs", async () => {
+    const calls: string[] = [];
+    const html = `<html><head><title>Public News</title></head><body><main>
+      <article><a href="/articles/first-public-story"><h2>First public news article title</h2></a></article>
+      <article><a href="/articles/second-public-story"><h2>Second public news article title</h2></a></article>
+    </main></body></html>`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url.toString());
+        return response(200, { "content-type": "text/html" }, html);
+      }),
+    );
+
+    const result = await discoverSource("https://example.com/news");
+    expect(result.candidate).toMatchObject({ provider: "generic_html", connectorType: "html_adapter" });
+    expect(result.articles).toHaveLength(2);
+    expect(calls.every((url) => url === "https://example.com/news")).toBe(true);
+  });
 });
 
 describe("classifyInput", () => {

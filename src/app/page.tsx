@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { fetchAllArticles } from "@/lib/feeds";
 import { getUserSourcesConfig } from "@/lib/db/userSources";
 import NewsApp from "@/components/NewsApp";
 import LoginLanding from "@/components/LoginLanding";
@@ -40,8 +39,6 @@ export default async function Home({
   }
 
   const { categories, sources } = await getUserSourcesConfig(session.user.id);
-  const { articles, failedSourceNames } =
-    sources.length === 0 ? { articles: [], failedSourceNames: [] } : await fetchAllArticles(sources);
   const lastUpdated = new Date().toISOString();
 
   async function signOutAction() {
@@ -51,10 +48,10 @@ export default async function Home({
 
   return (
     <NewsApp
-      initialArticles={articles}
+      initialArticles={[]}
       categories={categories}
       sources={sources}
-      failedSourceNames={failedSourceNames}
+      failedSourceNames={[]}
       lastUpdated={lastUpdated}
       user={{
         name: session.user.name ?? null,
@@ -63,6 +60,7 @@ export default async function Home({
       }}
       signOutAction={signOutAction}
       professionKey={session.user.professionKey}
+      loadArticlesClientSide
     />
   );
 }

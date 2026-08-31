@@ -261,7 +261,11 @@ export async function fetchAllArticles(sources: Source[]): Promise<FetchAllArtic
 
 async function translateArticles(articles: RawArticle[]): Promise<Article[]> {
   const texts = articles.flatMap((a) => [a.titleEn, a.summaryEn]);
-  const translated = await translateMany(texts);
+  // The anonymous MyMemory fallback accepts one text per request and becomes a
+  // severe latency bottleneck for a large morning feed. Azure, when configured,
+  // still receives the full batch; otherwise translate only a small leading
+  // sample and show original text for the rest instead of blocking the feed.
+  const translated = await translateMany(texts, "zh-TW", { maxFallbackItems: 24 });
   return articles.map((a, i) => ({
     ...a,
     titleZh: translated[i * 2] || a.titleEn,

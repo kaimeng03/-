@@ -4,7 +4,6 @@
 // only gets a real Subscription after a separate, explicit confirm step.
 import { discoverFeed } from "@/lib/feedDiscovery";
 import { matchHtmlSourceAdapter, getHtmlAdapter } from "@/lib/adapters";
-import { safeFetch, UnsafeUrlError } from "@/lib/safeFetch";
 import { stripTrackingParams } from "./trackingParams";
 import { previewRssFeed } from "./genericFeed";
 import { previewSitemap, looksLikeSitemapUrl, type SitemapPreview } from "./sitemap";
@@ -31,39 +30,18 @@ export interface DiscoveryPreview {
   sitemap?: SitemapPreview;
 }
 
-/** Fails fast with a precise error code when the site is actively blocking
- *  automated access, rather than letting discoverFeed exhaust every probe
- *  path and report a misleading "no feed found". Never attempts to work
- *  around the block (no headless browser, no challenge-solving) — it only
- *  classifies the response so the UI can show the right message. */
-async function assertNotBlocked(url: string): Promise<void> {
-  try {
-    const { response } = await safeFetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; ArchNewsReader/1.0)" },
-      timeoutMs: 10000,
-    });
-    if (response.status === 429) {
-      const retryAfterHeader = response.headers.get("retry-after");
-      const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : undefined;
-      throw new ConnectorError("RATE_LIMITED", "網站目前阻擋自動讀取，無法建立可靠來源。", retryAfter);
-    }
-    if (response.status === 401) {
-      throw new ConnectorError("LOGIN_REQUIRED", "這個網址需要登入才能存取。");
-    }
-    if (response.status === 403) {
-      throw new ConnectorError("ACCESS_BLOCKED", "網站目前阻擋自動讀取，無法建立可靠來源。");
-    }
-  } catch (err) {
-    if (err instanceof ConnectorError) throw err;
-    if (err instanceof UnsafeUrlError) throw new ConnectorError("UNSAFE_URL", err.message);
-    // Any other failure here (timeout, DNS, etc) is left for discoverFeed's
-    // own attempt to surface — this pre-flight only short-circuits on a
-    // clear, unambiguous block signal.
-  }
-}
-
 function isUrlLike(input: string): boolean {
   return /^https?:\/\//i.test(input.trim());
+}
+
+function throwDiscoveryError(error: string, retryAfter?: number): never {
+  if (error === "RATE_LIMITED") throw new ConnectorError("RATE_LIMITED", "The site is rate limiting automated access", retryAfter);
+  if (error === "LOGIN_REQUIRED") throw new ConnectorError("LOGIN_REQUIRED", "This URL requires login");
+  if (error === "ACCESS_BLOCKED") throw new ConnectorError("ACCESS_BLOCKED", "The site blocks automated access");
+  if (error.includes("不允許存取") || error.includes("網址格式")) {
+    throw new ConnectorError("UNSAFE_URL", error);
+  }
+  throw new ConnectorError("NO_FEED_FOUND", error);
 }
 
 /** Best-effort classification — never authoritative, just picks which
@@ -140,14 +118,13 @@ async function discoverUrlInput(rawUrl: string): Promise<DiscoveryPreview> {
     };
   }
 
-  // A pre-flight check on the raw URL: if the site itself is actively
-  // blocking automated access (429, a bot-challenge behind 403, a login
-  // wall), say so precisely instead of discoverFeed's generic "no feed
-  // found" — and never pretend the checkpoint page IS a feed.
-  await assertNotBlocked(cleaned);
-
-  const discovery = await discoverFeed(cleaned);
+  // Run direct RSS, HTML autodiscovery, and official cross-domain rules first.
+  // Visible article cards are checked next, before bounded guessed feed paths.
+  let discovery = await discoverFeed(cleaned, { probeCommonPaths: false });
   if (!discovery.ok) {
+    if (["RATE_LIMITED", "LOGIN_REQUIRED", "ACCESS_BLOCKED"].includes(discovery.error)) {
+      throwDiscoveryError(discovery.error, discovery.retryAfter);
+    }
     // Many modern public news pages (including Next.js sites) expose article
     // cards in their server-rendered HTML but publish no RSS. As a conservative
     // fallback, accept the page only when at least two same-site article links
@@ -187,13 +164,8 @@ async function discoverUrlInput(rawUrl: string): Promise<DiscoveryPreview> {
     } catch {
       // Preserve the original, more useful feed-discovery error below.
     }
-    // discoverFeed's own message distinguishes "no feed" from an SSRF/format
-    // rejection only by text; re-derive the error code from that message so
-    // API callers get a stable code, not a string to pattern-match on.
-    if (discovery.error.includes("不允許存取") || discovery.error.includes("網址格式")) {
-      throw new ConnectorError("UNSAFE_URL", discovery.error);
-    }
-    throw new ConnectorError("NO_FEED_FOUND", discovery.error);
+    discovery = await discoverFeed(cleaned);
+    if (!discovery.ok) throwDiscoveryError(discovery.error, discovery.retryAfter);
   }
 
   const articles = await previewRssFeed(discovery.feedUrl);

@@ -88,6 +88,44 @@ describe("NewsApp — add/delete are always usable once logged in (no separate a
     expect(await screen.findByPlaceholderText("貼上想追蹤的網站網址")).toBeInTheDocument();
   });
 
+  it("detects, confirms, and reports a successful self-added source", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        if (url.endsWith("/confirm")) {
+          return { ok: true, json: async () => ({ source: { id: "new-source" } }) } as Response;
+        }
+        if (url === "/api/source-discovery") {
+          return {
+            ok: true,
+            json: async () => ({
+              inputType: "url",
+              detectedUrl: "https://example.com/feed.xml",
+              candidate: { name: "Example News" },
+              previewToken: "signed-preview-token",
+              articles: [{ title: "Example article", summary: null, canonicalUrl: "https://example.com/article", publishedAt: null }],
+            }),
+          } as Response;
+        }
+        return { ok: true, json: async () => ({}) } as Response;
+      }),
+    );
+
+    render(<NewsApp {...baseProps()} />);
+    fireEvent.click(await screen.findByText("＋ 新增網站"));
+    fireEvent.click(await screen.findByText("自行新增"));
+    fireEvent.change(await screen.findByPlaceholderText("貼上想追蹤的網站網址"), {
+      target: { value: "https://example.com/news" },
+    });
+    fireEvent.click(screen.getByText("偵測"));
+    fireEvent.click(await screen.findByText("確認新增"));
+
+    expect(await screen.findByText("已成功加入新聞來源")).toBeInTheDocument();
+    expect(calls).toContain("/api/source-discovery/confirm");
+  });
+
   it("clicking ✕ on a source opens the remove-confirmation dialog directly", async () => {
     mockFetchSequence({});
     render(<NewsApp {...baseProps()} />);
@@ -106,6 +144,48 @@ describe("NewsApp — add/delete are always usable once logged in (no separate a
     fireEvent.click(screen.getByText("＋ 新增分類"));
 
     expect(await screen.findByPlaceholderText("分類名稱，例如：室內設計")).toBeInTheDocument();
+  });
+});
+
+describe("NewsApp — fast page shell with deferred news loading", () => {
+  it("keeps navigation usable while articles load independently", async () => {
+    let resolveArticles!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>((resolve) => {
+        resolveArticles = resolve;
+      })),
+    );
+
+    render(<NewsApp {...baseProps()} loadArticlesClientSide />);
+
+    expect(screen.getByText("＋ 新增網站")).toBeInTheDocument();
+    expect(await screen.findByText("正在載入你的新聞…")).toBeInTheDocument();
+
+    resolveArticles({
+      ok: true,
+      json: async () => ({
+        articles: [{
+          id: "article-1",
+          link: "https://example.com/article-1",
+          sourceId: "archdaily",
+          sourceName: "ArchDaily",
+          categoryId: "architecture-news",
+          pubDate: null,
+          thumbnail: null,
+          titleEn: "Fast article shell test",
+          titleZh: "快速載入測試文章",
+          summaryEn: "Summary",
+          summaryZh: "摘要",
+          feedHtmlEn: null,
+          contentMode: "extract",
+        }],
+        failedSourceNames: [],
+        lastUpdated: new Date().toISOString(),
+      }),
+    } as Response);
+
+    expect(await screen.findByText("快速載入測試文章")).toBeInTheDocument();
   });
 });
 
