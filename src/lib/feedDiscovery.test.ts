@@ -100,6 +100,60 @@ describe("discoverFeed — RSS/Atom autodiscovery via real HTML parsing", () => 
     vi.unstubAllGlobals();
   });
 
+  it("also treats a section URL without a trailing slash as a possible feed directory", async () => {
+    const attempted: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        attempted.push(url.toString());
+        if (url === "https://example.com/section/news") return htmlResponse(`<html><head></head></html>`);
+        if (url === "https://example.com/section/news/feed") return xmlResponse(RSS_XML);
+        return notFoundResponse();
+      }),
+    );
+
+    const result = await discoverFeed("https://example.com/section/news");
+    expect(result).toEqual({ ok: true, feedUrl: "https://example.com/section/news/feed" });
+    expect(attempted).toContain("https://example.com/section/news/feed");
+    vi.unstubAllGlobals();
+  });
+
+  it("discovers BBC Traditional Chinese through its verified official cross-domain feed", async () => {
+    const attempted: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        attempted.push(url.toString());
+        if (url === "https://www.bbc.com/zhongwen/trad") return htmlResponse(`<html><head></head></html>`);
+        if (url === "https://feeds.bbci.co.uk/zhongwen/trad/rss.xml") return xmlResponse(RSS_XML);
+        return notFoundResponse();
+      }),
+    );
+
+    const result = await discoverFeed("https://www.bbc.com/zhongwen/trad");
+    expect(result).toEqual({ ok: true, feedUrl: "https://feeds.bbci.co.uk/zhongwen/trad/rss.xml" });
+    expect(attempted).toContain("https://feeds.bbci.co.uk/zhongwen/trad/rss.xml");
+    vi.unstubAllGlobals();
+  });
+
+  it("does not apply the BBC rule to lookalike domains", async () => {
+    const attempted: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        attempted.push(url.toString());
+        return url === "https://bbc.com.evil.example/zhongwen/trad"
+          ? htmlResponse(`<html><head></head></html>`)
+          : notFoundResponse();
+      }),
+    );
+
+    const result = await discoverFeed("https://bbc.com.evil.example/zhongwen/trad");
+    expect(result.ok).toBe(false);
+    expect(attempted).not.toContain("https://feeds.bbci.co.uk/zhongwen/trad/rss.xml");
+    vi.unstubAllGlobals();
+  });
+
   it("reports NO_FEED when nothing is found, without fabricating a URL", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => notFoundResponse()));
 

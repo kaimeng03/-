@@ -28,4 +28,17 @@ describe("generic HTML news listing fallback", () => {
     const html = `<main><a href="/about">About us</a><article><a href="/news/12345"><h2>Only one possible article</h2></a></article></main>`;
     expect(parseGenericHtmlListing(html, "https://example.com/").articles).toEqual([]);
   });
+
+  it("recognizes opaque article ids followed by a locale suffix", () => {
+    const html = `<main>
+      <article><a href="/zhongwen/articles/cg49yzyv4yko/trad"><h2>第一篇 BBC 中文測試新聞標題</h2></a></article>
+      <article><a href="/zhongwen/articles/cly1w2x3y4z5/trad"><h2>第二篇 BBC 中文測試新聞標題</h2></a></article>
+    </main>`;
+
+    const result = parseGenericHtmlListing(html, "https://www.bbc.com/zhongwen/trad");
+    expect(result.articles.map((article) => article.link)).toEqual([
+      "https://www.bbc.com/zhongwen/articles/cg49yzyv4yko/trad",
+      "https://www.bbc.com/zhongwen/articles/cly1w2x3y4z5/trad",
+    ]);
+  });
 });

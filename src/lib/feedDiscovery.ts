@@ -10,6 +10,7 @@
 
 import { safeFetch, readBodyWithLimit, validateUrlForFetch, UnsafeUrlError } from "./safeFetch";
 import { findFeedLinks } from "./connectors/htmlLinks";
+import { officialFeedCandidates } from "./connectors/officialFeeds";
 import { stripTrackingParams } from "./connectors/trackingParams";
 
 const COMMON_FEED_PATHS = ["/feed", "/feed/", "/rss", "/rss.xml", "/feed.xml", "/atom.xml"];
@@ -81,6 +82,15 @@ function candidateFeedPaths(parsed: URL): string[] {
   const origin = `${parsed.protocol}//${parsed.host}`;
   const paths = new Set(COMMON_FEED_PATHS.map((p) => origin + p));
 
+  // A URL such as /section/news is often a section directory even without a
+  // trailing slash. Probe both /section/news/feed and the parent /section/feed.
+  // The set keeps the bounded list deduplicated.
+  const fullPath = parsed.pathname.replace(/\/+$/, "");
+  if (fullPath) {
+    const base = origin + fullPath;
+    for (const p of COMMON_FEED_PATHS) paths.add(base + p);
+  }
+
   const dirPath = parsed.pathname.endsWith("/") ? parsed.pathname : parsed.pathname.replace(/[^/]*$/, "");
   if (dirPath && dirPath !== "/") {
     const base = origin + dirPath.replace(/\/+$/, "");
@@ -115,6 +125,16 @@ export async function discoverFeed(inputUrl: string): Promise<DiscoveryResult> {
     const discoveredUrl = await findAutodiscoveryLink(direct.text, direct.finalUrl);
     if (discoveredUrl) {
       return { ok: true, feedUrl: discoveredUrl };
+    }
+  }
+
+  // Some publishers host feeds on a separate official domain and omit the
+  // standard <link rel="alternate"> marker. Try only narrowly reviewed rules,
+  // and verify every candidate's response before accepting it.
+  for (const candidate of officialFeedCandidates(parsed)) {
+    const doc = await fetchDoc(candidate, PROBE_TIMEOUT_MS);
+    if (doc && doc.ok && looksLikeFeed(doc)) {
+      return { ok: true, feedUrl: doc.finalUrl };
     }
   }
 

@@ -25,6 +25,9 @@ const EXCLUDED_PATH_PARTS = new Set([
   "privacy", "search", "signin", "signup", "tag", "terms",
 ]);
 
+const ARTICLE_ROUTE_PARTS = new Set(["article", "articles", "post", "posts", "story", "stories"]);
+const TRAILING_LOCALE_PARTS = new Set(["trad", "simp", "zh-hant", "zh-hans", "en", "zh"]);
+
 export interface GenericHtmlPreview {
   sourceName: string;
   articles: HtmlAdapterArticle[];
@@ -47,7 +50,21 @@ function looksLikeArticleUrl(url: URL, pageUrl: URL): boolean {
   if (parts.length < 2 || parts.some((part) => EXCLUDED_PATH_PARTS.has(part.toLowerCase()))) return false;
 
   const last = parts.at(-1) || "";
-  return /^\d{4,}$/.test(last) || /[a-z\d]+(?:-[a-z\d]+){2,}/i.test(last) || last.length >= 18;
+  if (/^\d{4,}$/.test(last) || /[a-z\d]+(?:-[a-z\d]+){2,}/i.test(last) || last.length >= 18) {
+    return true;
+  }
+
+  // Several publishers use /articles/<opaque-id>/<locale>. The old heuristic
+  // inspected only the final locale segment, so valid BBC article pages such
+  // as /zhongwen/articles/cg49yzyv4yko/trad were rejected. Require a known
+  // article route marker and a substantial identifier after it to avoid
+  // accepting ordinary category/navigation links.
+  const routeIndex = parts.findIndex((part) => ARTICLE_ROUTE_PARTS.has(part.toLowerCase()));
+  if (routeIndex < 0) return false;
+  const routeTail = parts.slice(routeIndex + 1);
+  if (TRAILING_LOCALE_PARTS.has((routeTail.at(-1) || "").toLowerCase())) routeTail.pop();
+  const identifier = routeTail.at(-1) || "";
+  return identifier.length >= 6 && /^[a-z\d][a-z\d_-]*$/i.test(identifier);
 }
 
 function nearestCard(anchor: Element): Element {

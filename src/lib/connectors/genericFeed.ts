@@ -11,7 +11,41 @@ const TIMEOUT_MS = 10000;
 const MAX_FEED_BYTES = 5 * 1024 * 1024;
 const PREVIEW_SIZE = 5;
 
-const parser = new Parser();
+type PreviewFeedItem = Parser.Item & {
+  mediaThumbnail?: { $?: { url?: string } };
+  mediaContent?: { $?: { url?: string } } | { $?: { url?: string } }[];
+  "content:encoded"?: string;
+};
+
+const parser = new Parser<Record<string, unknown>, PreviewFeedItem>({
+  customFields: {
+    item: [
+      ["media:content", "mediaContent"],
+      ["media:thumbnail", "mediaThumbnail"],
+      ["content:encoded", "content:encoded"],
+    ],
+  },
+});
+
+function firstImageFromHtml(html: string): string | null {
+  const match = /<img[^>]+src=["']([^"']+)["']/i.exec(html);
+  return match ? match[1] : null;
+}
+
+function extractThumbnail(item: PreviewFeedItem): string | null {
+  const thumbnail = item.mediaThumbnail?.$?.url;
+  if (thumbnail) return thumbnail;
+
+  if (Array.isArray(item.mediaContent)) {
+    const media = item.mediaContent.find((entry) => entry.$?.url);
+    if (media?.$?.url) return media.$.url;
+  } else if (item.mediaContent?.$?.url) {
+    return item.mediaContent.$.url;
+  }
+
+  if (item.enclosure?.url) return item.enclosure.url;
+  return firstImageFromHtml(item["content:encoded"] || item.content || item.summary || "");
+}
 
 export async function previewRssFeed(feedUrl: string): Promise<NormalizedArticle[]> {
   let xml: string;
@@ -35,7 +69,7 @@ export async function previewRssFeed(feedUrl: string): Promise<NormalizedArticle
     throw new ConnectorError("FETCH_TIMEOUT", "Feed request failed or timed out");
   }
 
-  let feed: Parser.Output<Record<string, unknown>>;
+  let feed: Parser.Output<PreviewFeedItem>;
   try {
     feed = await parser.parseString(xml);
   } catch {
@@ -54,7 +88,7 @@ export async function previewRssFeed(feedUrl: string): Promise<NormalizedArticle
     source: feed.title || feedUrl,
     authors: item.creator ? [item.creator] : [],
     publishedAt: item.isoDate || item.pubDate || null,
-    thumbnail: null,
+    thumbnail: extractThumbnail(item),
     doi: null,
     pmid: null,
     language: null,
