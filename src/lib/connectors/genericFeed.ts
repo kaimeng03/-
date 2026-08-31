@@ -5,7 +5,9 @@
 import Parser from "rss-parser";
 import { safeFetch, readBodyWithLimit, UnsafeUrlError } from "@/lib/safeFetch";
 import { ConnectorError } from "./errors";
+import { unwrapFeedCdata } from "./feedText";
 import type { NormalizedArticle } from "./types";
+import { stripToPlainText } from "@/lib/sanitizeArticleHtml";
 
 const TIMEOUT_MS = 10000;
 const MAX_FEED_BYTES = 5 * 1024 * 1024;
@@ -82,8 +84,8 @@ export async function previewRssFeed(feedUrl: string): Promise<NormalizedArticle
 
   return feed.items.slice(0, PREVIEW_SIZE).map((item) => ({
     id: `feed:${item.link || item.guid || item.title}`,
-    title: item.title || "(untitled)",
-    summary: item.contentSnippet || null,
+    title: unwrapFeedCdata(item.title) || "(untitled)",
+    summary: stripToPlainText(unwrapFeedCdata(item.contentSnippet || item.content || item.summary)) || null,
     canonicalUrl: item.link || feedUrl,
     source: feed.title || feedUrl,
     authors: item.creator ? [item.creator] : [],

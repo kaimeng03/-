@@ -83,9 +83,15 @@ async function findAutodiscoveryLink(html: string, baseUrl: string): Promise<str
 /** Common feed paths to probe, both at the site origin and — when the input
  *  URL has its own path, e.g. https://example.com/blog/ — relative to that
  *  path too (so /blog/feed, /blog/rss.xml etc are tried, not just /feed). */
-function candidateFeedPaths(parsed: URL): string[] {
+function candidateFeedPaths(parsed: URL, preferOrigin = false): string[] {
   const origin = `${parsed.protocol}//${parsed.host}`;
   const paths = new Set<string>();
+
+  const addOriginPaths = () => {
+    for (const p of COMMON_FEED_PATHS) paths.add(origin + p);
+  };
+
+  if (preferOrigin) addOriginPaths();
 
   // A URL such as /section/news is often a section directory even without a
   // trailing slash. Probe both /section/news/feed and the parent /section/feed.
@@ -96,7 +102,7 @@ function candidateFeedPaths(parsed: URL): string[] {
     for (const p of COMMON_FEED_PATHS) paths.add(base + p);
   }
 
-  for (const p of COMMON_FEED_PATHS) paths.add(origin + p);
+  if (!preferOrigin) addOriginPaths();
 
   const dirPath = parsed.pathname.endsWith("/") ? parsed.pathname : parsed.pathname.replace(/[^/]*$/, "");
   if (dirPath && dirPath !== "/") {
@@ -134,12 +140,6 @@ export async function discoverFeed(inputUrl: string, options: DiscoverFeedOption
     return { ok: true, feedUrl: direct.finalUrl };
   }
 
-  if (!direct.ok) {
-    if (direct.status === 429) return { ok: false, error: "RATE_LIMITED", retryAfter: direct.retryAfter };
-    if (direct.status === 401) return { ok: false, error: "LOGIN_REQUIRED" };
-    if (direct.status === 403) return { ok: false, error: "ACCESS_BLOCKED" };
-  }
-
   if (direct.ok && looksLikeHtml(direct)) {
     const discoveredUrl = await findAutodiscoveryLink(direct.text, direct.finalUrl);
     if (discoveredUrl) {
@@ -158,7 +158,10 @@ export async function discoverFeed(inputUrl: string, options: DiscoverFeedOption
   }
 
   if (options.probeCommonPaths !== false) {
-    const candidates = candidateFeedPaths(parsed);
+    // If the supplied page itself is blocked, prioritize conventional
+    // origin-level feeds such as /rss.xml; publishers commonly keep those
+    // public even when Cloudflare rejects HTML-page requests.
+    const candidates = candidateFeedPaths(parsed, !direct.ok);
     for (let start = 0; start < candidates.length; start += PROBE_CONCURRENCY) {
       const docs = await Promise.all(
         candidates.slice(start, start + PROBE_CONCURRENCY).map((path) => fetchDoc(path, PROBE_TIMEOUT_MS)),
@@ -168,6 +171,15 @@ export async function discoverFeed(inputUrl: string, options: DiscoverFeedOption
         return { ok: true, feedUrl: match.finalUrl };
       }
     }
+  }
+
+  // A publisher may block its HTML pages while deliberately keeping a public
+  // RSS endpoint available (Urology Times is one example). Only report the
+  // page-level block after verified feed candidates have also failed.
+  if (!direct.ok) {
+    if (direct.status === 429) return { ok: false, error: "RATE_LIMITED", retryAfter: direct.retryAfter };
+    if (direct.status === 401) return { ok: false, error: "LOGIN_REQUIRED" };
+    if (direct.status === 403) return { ok: false, error: "ACCESS_BLOCKED" };
   }
 
   return { ok: false, error: "這個網站沒有偵測到 RSS/Atom feed，暫時無法自動加入。" };

@@ -10,6 +10,7 @@ import { fetchEuropePmcArticles } from "./connectors/europepmc";
 import { fetchPubMedArticles } from "./connectors/pubmed";
 import { fetchCrossrefArticles } from "./connectors/crossref";
 import type { NormalizedArticle } from "./connectors/types";
+import { unwrapFeedCdata } from "./connectors/feedText";
 import type { Article } from "./types";
 
 type FeedItem = Parser.Item & {
@@ -177,8 +178,8 @@ async function fetchSourceArticles(source: Source): Promise<RawArticle[]> {
 
   return (feed.items as FeedItem[]).slice(0, MAX_ARTICLES_PER_SOURCE).map((item) => {
     const link = item.link || "";
-    const rawHtml = item["content:encoded"] || item.content || item.summary || "";
-    const rawSummary = item.contentSnippet || stripToPlainText(rawHtml);
+    const rawHtml = unwrapFeedCdata(item["content:encoded"] || item.content || item.summary);
+    const rawSummary = unwrapFeedCdata(item.contentSnippet) || stripToPlainText(rawHtml);
 
     let feedHtmlEn: string | null = null;
     const plainLength = stripToPlainText(rawHtml).length;
@@ -195,7 +196,7 @@ async function fetchSourceArticles(source: Source): Promise<RawArticle[]> {
       categoryId: source.categoryId,
       pubDate: safeParseDate(item.isoDate, item.pubDate),
       thumbnail: extractThumbnail(item),
-      titleEn: item.title || "(無標題)",
+      titleEn: unwrapFeedCdata(item.title) || "(無標題)",
       summaryEn: rawSummary.slice(0, 220),
       feedHtmlEn,
       contentMode: "extract",

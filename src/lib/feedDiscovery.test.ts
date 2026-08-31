@@ -170,6 +170,21 @@ describe("discoverFeed — RSS/Atom autodiscovery via real HTML parsing", () => 
     expect(result.ok).toBe(false);
     vi.unstubAllGlobals();
   });
+
+  it("accepts a public RSS endpoint even when the supplied section page returns 403", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "https://medical.example.com/clinical/topic") return htmlResponse("blocked", 403);
+        if (url === "https://medical.example.com/rss.xml") return xmlResponse(RSS_XML);
+        return notFoundResponse(403);
+      }),
+    );
+
+    const result = await discoverFeed("https://medical.example.com/clinical/topic");
+    expect(result).toEqual({ ok: true, feedUrl: "https://medical.example.com/rss.xml" });
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("discoverFeed — SSRF protection is still enforced (delegates to safeFetch)", () => {

@@ -123,8 +123,14 @@ async function discoverUrlInput(rawUrl: string): Promise<DiscoveryPreview> {
   let discovery = await discoverFeed(cleaned, { probeCommonPaths: false });
   if (!discovery.ok) {
     if (["RATE_LIMITED", "LOGIN_REQUIRED", "ACCESS_BLOCKED"].includes(discovery.error)) {
-      throwDiscoveryError(discovery.error, discovery.retryAfter);
+      // The HTML page can be blocked while an intentionally public RSS feed
+      // remains available. Run the bounded common-feed probe before treating
+      // the whole publisher as inaccessible.
+      discovery = await discoverFeed(cleaned);
+      if (!discovery.ok) throwDiscoveryError(discovery.error, discovery.retryAfter);
     }
+  }
+  if (!discovery.ok) {
     // Many modern public news pages (including Next.js sites) expose article
     // cards in their server-rendered HTML but publish no RSS. As a conservative
     // fallback, accept the page only when at least two same-site article links

@@ -38,4 +38,23 @@ describe("generic RSS preview", () => {
     });
     vi.unstubAllGlobals();
   });
+
+  it("unwraps publisher CDATA text that was serialized literally", async () => {
+    const xml = `<?xml version="1.0"?><rss version="2.0"><channel><title>Medical News</title>
+      <item><title>&lt;![CDATA[Readable medical headline]]&gt;</title>
+        <link>https://example.com/view/article</link>
+        <description>&lt;![CDATA[Readable medical summary.]]&gt;</description>
+      </item></channel></rss>`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(xml, { status: 200, headers: { "content-type": "application/rss+xml" } })),
+    );
+
+    const articles = await previewRssFeed("https://example.com/rss.xml");
+    expect(articles[0]).toMatchObject({
+      title: "Readable medical headline",
+      summary: "Readable medical summary.",
+    });
+    vi.unstubAllGlobals();
+  });
 });
